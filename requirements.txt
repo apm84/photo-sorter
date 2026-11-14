@@ -1,0 +1,3 @@
+# Linux/macOS or CPU-only Windows.
+-r requirements-base.txt
+onnxruntime>=1.20

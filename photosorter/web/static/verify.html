@@ -1,0 +1,42 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Photo Sorter - Verify originals</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/static/style.css"><link rel="icon" href="data:,"></head>
+<body><header><h1>Photo Sorter</h1><nav aria-label="Pages"><a href="/">Search</a><a href="/people">People</a><a href="/albums">Albums</a><a href="/cleanup">Clean up</a><a href="/verify" aria-current="page">Verify</a><a href="/sync">Family sync</a></nav><a class="syncchip" id="syncchip" href="/sync" hidden></a></header>
+<main class="verify page">
+  <h2>Verify before deleting originals</h2>
+  <p class="status">Checks every file in your original folders against your sorted library, byte for byte. It only reads your originals. Photo Sorter never deletes them.</p>
+  <section class="banner" id="banner" role="status" aria-live="polite">Loading...</section>
+  <section class="cu-stats" id="buckets" aria-label="Results by kind"></section>
+  <section class="row-actions">
+    <button id="start" class="primary">Check my originals</button>
+    <button id="stop" hidden>Stop</button>
+    <a id="csv" class="button" href="/api/verify/csv" download>Download CSV of every file</a>
+    <button id="rescue" class="danger" disabled>Rescue not-safe files...</button>
+    <button id="open-rescued" hidden>Open Rescued folder</button>
+  </section>
+  <p class="status" id="progress"></p>
+  <p class="status" id="sources"></p>
+  <p class="advice" id="advice"></p>
+  <section aria-labelledby="list-title">
+    <h3 id="list-title">Files that need attention</h3>
+    <label>Show <select id="bucket">
+      <option value="missing">No copy in the library</option>
+      <option value="near_only">Only a look-alike copy</option>
+      <option value="safe_deduped">Removed on purpose as duplicates</option>
+      <option value="safe_copy">Identical copy in the library</option>
+    </select></label>
+    <table class="vlist"><thead><tr><th scope="col">Original</th><th scope="col">Size</th><th scope="col">Why</th></tr></thead>
+      <tbody id="rows"></tbody></table>
+    <button id="more" hidden>Show more</button>
+  </section>
+</main>
+<dialog id="rescue-dlg" aria-labelledby="rescue-title">
+  <form method="dialog">
+    <h2 id="rescue-title">Rescue not-safe files?</h2>
+    <p id="rescue-text"></p>
+    <p class="status">Files are copied into the Rescued folder inside your library, keeping their folder names. Your originals are not moved or changed.</p>
+    <div class="row"><button value="cancel" autofocus>Cancel</button><button value="ok" class="danger">Copy them</button></div>
+  </form>
+</dialog>
+<script src="/static/common.js"></script>
+<script src="/static/verify.js"></script>
+</body></html>

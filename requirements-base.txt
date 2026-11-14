@@ -1,0 +1,12 @@
+# Shared runtime dependencies (tested versions noted). Do not add onnxruntime here.
+numpy>=2.0
+pillow>=11.0
+pillow-heif>=0.20     # HEIC/HEIF photos (iPhone). pip-installed only; not bundled into the .exe (see README)
+ImageHash>=4.3
+reverse_geocoder>=1.5.1   # offline GeoNames cities1000 data (CC-BY 4.0)
+scikit-learn>=1.5
+opencv-python-headless>=4.9   # YuNet + SFace face models (tested 5.0.0)
+tokenizers>=0.20
+fastapi>=0.115
+uvicorn>=0.30
+send2trash>=1.8

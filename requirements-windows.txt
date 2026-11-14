@@ -1,0 +1,4 @@
+# Windows with any DirectX 12 GPU (AMD Radeon RX 570 included). onnxruntime-directml REPLACES onnxruntime:
+# never install both in the same environment.
+-r requirements-base.txt
+onnxruntime-directml>=1.20

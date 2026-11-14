@@ -1,0 +1,62 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Photo Sorter - Clean up duplicates</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/static/style.css"><link rel="icon" href="data:,"></head>
+<body><header><h1>Photo Sorter</h1><nav aria-label="Pages"><a href="/">Search</a><a href="/people">People</a><a href="/albums">Albums</a><a href="/cleanup" aria-current="page">Clean up</a><a href="/verify">Verify</a><a href="/sync">Family sync</a></nav><a class="syncchip" id="syncchip" href="/sync" hidden></a></header>
+<main class="cleanup">
+  <div class="tabs">
+    <div role="tablist" aria-label="Clean up" class="tablist" id="tablist">
+      <button type="button" role="tab" id="tab-review" aria-selected="true" tabindex="0">Group review <span class="tab-badge" id="badge-review"></span></button>
+      <button type="button" role="tab" id="tab-tasks" aria-selected="false" tabindex="-1">Clean up tasks <span class="tab-badge" id="badge-tasks"></span></button>
+    </div>
+    <div role="tabpanel" id="panel-review" aria-labelledby="tab-review">
+     <div class="panel-inner">
+      <section class="cu-stats" aria-label="Duplicate review summary" id="review-stats">
+        <div><b id="st-groups">-</b><span>groups to review</span></div>
+        <div><b id="st-files">-</b><span>copies would be removed</span></div>
+        <div><b id="st-bytes">-</b><span>could be freed</span></div>
+      </section>
+      <section class="cu-bar" aria-label="Progress">
+        <div class="cu-progress"><span id="progtext">Loading...</span><progress id="prog" max="1" value="0"></progress></div>
+        <label>Show <select id="filter"><option value="pending">groups to review</option><option value="all">all groups</option></select></label>
+        <button id="undo" disabled title="Undo the last applied decision (U)">Undo</button>
+        <button id="all" class="danger">Approve all remaining...</button>
+      </section>
+      <p class="status" id="mode"></p>
+      <section id="group" class="cu-group" aria-live="off"></section>
+      <p class="cu-keys"><kbd>Enter</kbd> apply &middot; <kbd>&larr;</kbd>/<kbd>&rarr;</kbd> pick a different keeper &middot;
+        <kbd>1</kbd>-<kbd>9</kbd> toggle keep/remove &middot; <kbd>A</kbd> keep all (not duplicates) &middot;
+        <kbd>D</kbd> delete all &middot; <kbd>S</kbd> skip &middot; <kbd>P</kbd> previous &middot; <kbd>U</kbd> undo</p>
+     </div>
+    </div>
+    <div role="tabpanel" id="panel-tasks" aria-labelledby="tab-tasks" hidden>
+     <div class="panel-inner">
+      <section class="cu-stats" aria-label="Clean up summary">
+        <div><b id="tt-files">-</b><span>files involved</span></div>
+        <div><b id="tt-bytes">-</b><span>space you could free</span></div>
+      </section>
+      <ul class="tasks" id="tasks" aria-label="Suggested clean up actions"></ul>
+      <p class="status">Only copies inside your sorted library are ever touched. Your original photos are never changed.</p>
+      <section class="learning" aria-labelledby="learn-title">
+        <h2 id="learn-title">What Clean up has learned</h2>
+        <p id="learn-text">Loading...</p>
+        <ul id="learn-lessons"></ul>
+        <p class="status">Each group where you keep some copies and remove others teaches it which copy you prefer.
+          Keep all, Delete all and Approve all don't count. Everything stays on this PC.</p>
+        <button type="button" id="learn-reset">Reset learning...</button>
+      </section>
+     </div>
+    </div>
+  </div>
+  <p class="sr-status" id="live" role="status" aria-live="polite"></p>
+</main>
+<dialog id="confirm" aria-labelledby="confirm-title">
+  <form method="dialog">
+    <h2 id="confirm-title">Approve all remaining recommendations?</h2>
+    <p id="confirm-text">Working it out...</p>
+    <p class="status">Only copies inside your sorted library are touched. Your original photos are never changed.
+      You can undo this with Undo.</p>
+    <div class="row"><button value="cancel" autofocus>Cancel</button><button value="ok" class="danger" id="confirm-ok">Approve all</button></div>
+  </form>
+</dialog>
+<script src="/static/common.js"></script>
+<script src="/static/cleanup.js"></script>
+</body></html>

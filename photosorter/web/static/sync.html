@@ -1,0 +1,43 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Photo Sorter - Family sync</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/static/style.css"><link rel="icon" href="data:,"></head>
+<body><header><h1>Photo Sorter</h1><nav aria-label="Pages"><a href="/">Search</a><a href="/people">People</a><a href="/albums">Albums</a><a href="/cleanup">Clean up</a><a href="/verify">Verify</a><a href="/sync" aria-current="page">Family sync</a></nav><a class="syncchip" id="syncchip" href="/sync" hidden></a></header>
+<main class="sync page">
+  <h2>Family sync to the calendar Pi</h2>
+  <p class="status">Sends your sorted photos to the family calendar Pi over your home network, so the family can browse them on their phones and the TV can show your albums. One way only: nothing on this PC is changed, and photos you remove here are removed there too.</p>
+  <section class="banner" id="line" role="status" aria-live="polite">Loading...</section>
+  <section class="row-actions">
+    <button id="now" class="primary">Sync now</button>
+    <button id="pause">Pause</button>
+    <button id="test">Test connection</button>
+  </section>
+  <p class="status" id="detail"></p>
+  <form id="cfg" class="settings">
+    <fieldset>
+      <legend>Calendar</legend>
+      <label>Calendar address <input id="pi_url" type="url" placeholder="https://calendar.example.org" autocomplete="off" spellcheck="false"></label>
+      <label>Pairing code <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="Paste from the calendar admin: Display, Family photos"></label>
+      <p class="status" id="paired"></p>
+    </fieldset>
+    <fieldset>
+      <legend>What to send</legend>
+      <label class="check"><input type="checkbox" id="include_full"> Also send full-size photos (largest part; thumbnails and previews go first)</label>
+      <label class="check"><input type="checkbox" id="include_screenshots"> Include screenshots (albums are always sent)</label>
+    </fieldset>
+    <fieldset>
+      <legend>When and how fast</legend>
+      <label>Speed limit <input id="max_mbps" type="number" min="0.1" max="100" step="0.1" inputmode="decimal"> MB per second</label>
+      <label class="check"><input type="checkbox" id="window_enabled"> Only sync between
+        <input id="window_start" type="time"> and <input id="window_end" type="time"> (Sync now ignores this)</label>
+      <label>Look for changes every <input id="interval_minutes" type="number" min="5" max="1440" step="5"> minutes</label>
+      <label class="check"><input type="checkbox" id="auto_after_run"> Sync after each sort run</label>
+      <label class="check"><input type="checkbox" id="enabled"> Sync automatically</label>
+      <label class="check"><input type="checkbox" id="verify_tls"> Check the calendar's security certificate</label>
+    </fieldset>
+    <button type="submit" class="primary">Save</button>
+    <p class="status" id="saved" role="status"></p>
+  </form>
+  <p class="status">The sync runs in its own low-priority background process and keeps going if you close this page or Photo Sorter. To start it when you sign in to Windows, run <b>Install-Sync-Autostart.bat</b> in the Photo Sorter folder.</p>
+</main>
+<script src="/static/common.js"></script>
+<script src="/static/sync.js"></script>
+</body></html>

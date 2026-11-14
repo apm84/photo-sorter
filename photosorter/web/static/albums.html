@@ -1,0 +1,49 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Photo Sorter - Albums</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/static/style.css"><link rel="icon" href="data:,"></head>
+<body><header><h1>Photo Sorter</h1><nav aria-label="Pages"><a href="/">Search</a><a href="/people">People</a><a href="/albums" aria-current="page">Albums</a><a href="/cleanup">Clean up</a><a href="/verify">Verify</a><a href="/sync">Family sync</a></nav><a class="syncchip" id="syncchip" href="/sync" hidden></a>
+<span class="status" id="status" role="status" aria-live="polite"></span></header>
+<main>
+<section id="list-view" aria-labelledby="albums-title">
+  <div class="gallery-head"><h2 id="albums-title" class="page-title">Albums</h2>
+    <button type="button" id="new" class="primary">New album</button></div>
+  <p class="status">To fill an album, select photos on the Search or People page (hover a photo and click its circle;
+    Shift-click selects a range) and press <b>Add to album</b>. Each album is also a folder in your sorted library
+    (<code>Albums\&lt;name&gt;</code>) holding links to the same photos, so it takes almost no extra space.</p>
+  <div class="named albums" id="albums" role="list" aria-label="Albums"></div>
+</section>
+
+<section id="album-view" aria-labelledby="album-title" hidden>
+  <div class="gallery-head">
+    <button type="button" id="back">&larr; All albums</button>
+    <h2 id="album-title" class="page-title"></h2><span class="status" id="album-count"></span>
+    <button type="button" id="rename">Rename</button>
+    <button type="button" id="openfolder">Open folder</button>
+    <button type="button" id="delete" class="danger">Delete album...</button>
+  </div>
+  <div class="filters"><div id="album-dates"></div></div>
+  <div id="album-selbar"></div>
+  <div id="album-grid"></div>
+  <div class="loadmore"><button id="album-more" hidden>Load more</button></div>
+</section>
+</main>
+
+<dialog id="name-dlg" aria-labelledby="name-title">
+  <form method="dialog">
+    <h2 id="name-title">New album</h2>
+    <label>Name <input id="name-input" maxlength="120" required autocomplete="off" autofocus></label>
+    <p id="name-err" class="error" role="alert"></p>
+    <div class="row"><button type="button" id="name-cancel">Cancel</button><button value="ok" class="primary" id="name-ok">Save</button></div>
+  </form>
+</dialog>
+<dialog id="del-dlg" aria-labelledby="del-title">
+  <form method="dialog">
+    <h2 id="del-title">Delete this album?</h2>
+    <p id="del-text"></p>
+    <p class="status">Only the album and its folder of links are deleted. Your photos stay in your library, and
+      originals are never touched.</p>
+    <div class="row"><button value="ok" class="danger">Delete album</button><button value="cancel" autofocus>Cancel</button></div>
+  </form>
+</dialog>
+<script src="/static/common.js"></script>
+<script src="/static/albums.js"></script>
+</body></html>

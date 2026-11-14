@@ -1,0 +1,7 @@
+# One-time SigLIP 2 -> ONNX export (Export-Models.bat). Installed into a separate .exportenv, never the app env.
+# torch comes from the CPU index: pip install torch --index-url https://download.pytorch.org/whl/cpu
+transformers>=4.49
+sentencepiece
+protobuf
+onnx
+onnxruntime

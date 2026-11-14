@@ -1,0 +1,108 @@
+name: Windows installer
+
+# Every push to main builds and tests the installer (artifact only); a v* tag also publishes the GitHub Release.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+
+      - name: Version check
+        id: ver
+        run: |
+          $v = (python -c "import photosorter; print(photosorter.__version__)").Trim()
+          "version=$v" >> $env:GITHUB_OUTPUT
+          if ($env:GITHUB_REF_TYPE -eq "tag" -and $env:GITHUB_REF_NAME -ne "v$v") {
+            throw "Tag $env:GITHUB_REF_NAME does not match photosorter.__version__ $v"
+          }
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-windows.txt -r requirements-dev.txt
+
+      - name: Tests (Windows, CPU)
+        run: python -m pytest -q -p no:cacheprovider
+
+      - name: Build app (PyInstaller, one folder)
+        run: |
+          pip uninstall -y pillow-heif
+          pip install "pi-heif>=0.20" "pyinstaller>=6.10"
+          pyinstaller --noconfirm packaging/photosorter.spec
+
+      - name: Smoke test the built exe
+        run: |
+          $exe = "dist\PhotoSorter\PhotoSorter.exe"
+          $p = Start-Process $exe -ArgumentList "gpu-probe","--json","$pwd\probe.json" -Wait -PassThru
+          Get-Content probe.json
+          if (-not (Select-String -Path probe.json -Pattern "DmlExecutionProvider" -Quiet)) { throw "DirectML provider missing from the build" }
+          $p = Start-Process $exe -ArgumentList "selftest","--cpu","--no-ai","--no-faces","--json","$pwd\selftest.json" -Wait -PassThru
+          Get-Content selftest.json
+          if (-not (Select-String -Path selftest.json -Pattern '"heic": "' -Quiet)) { throw "HEIC support missing from the build" }
+          "{0:N0} MB" -f ((Get-ChildItem dist\PhotoSorter -Recurse | Measure-Object Length -Sum).Sum / 1MB)
+
+      - name: Build installer (Inno Setup)
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y --no-progress
+          }
+          & $iscc "/DAppVer=${{ steps.ver.outputs.version }}" packaging\PhotoSorter.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+          $h = (Get-FileHash dist-installer\PhotoSorterSetup.exe -Algorithm SHA256).Hash.ToLower()
+          "$h  PhotoSorterSetup.exe" | Out-File -Encoding ascii dist-installer\SHA256SUMS.txt
+          Get-Content dist-installer\SHA256SUMS.txt
+          "{0:N0} MB" -f ((Get-Item dist-installer\PhotoSorterSetup.exe).Length / 1MB)
+
+      - name: Test the installer (silent install, run, uninstall)
+        run: |
+          $p = Start-Process dist-installer\PhotoSorterSetup.exe -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/LOG=install.log" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content install.log; throw "install failed ($($p.ExitCode))" }
+          $app = "$env:LOCALAPPDATA\Programs\PhotoSorter\PhotoSorter.exe"
+          if (-not (Test-Path $app)) { throw "PhotoSorter.exe not installed" }
+          $p = Start-Process $app -ArgumentList "selftest","--cpu","--no-ai","--no-faces","--json","$pwd\installed.json" -Wait -PassThru
+          Get-Content installed.json
+          $p = Start-Process dist-installer\PhotoSorterSetup.exe -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "upgrade-in-place failed ($($p.ExitCode))" }
+          $p = Start-Process "$env:LOCALAPPDATA\Programs\PhotoSorter\unins000.exe" -ArgumentList "/VERYSILENT" -Wait -PassThru
+          "uninstall exit $($p.ExitCode)"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PhotoSorterSetup-${{ steps.ver.outputs.version }}
+          path: dist-installer/*
+          retention-days: 14
+
+      - name: Publish GitHub Release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $notes = "docs/releases/$tag.md"
+          if (-not (Test-Path $notes)) { "Photo Sorter $tag" | Out-File -Encoding utf8 notes.md; $notes = "notes.md" }
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag dist-installer/PhotoSorterSetup.exe dist-installer/SHA256SUMS.txt --clobber
+          } else {
+            gh release create $tag dist-installer/PhotoSorterSetup.exe dist-installer/SHA256SUMS.txt --title "Photo Sorter $tag" --notes-file $notes --latest
+          }

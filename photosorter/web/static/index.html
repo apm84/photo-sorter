@@ -1,0 +1,30 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Photo Sorter - Search</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/static/style.css"><link rel="icon" href="data:,"></head>
+<body><header><h1>Photo Sorter</h1><nav aria-label="Pages"><a href="/" aria-current="page">Search</a><a href="/people">People</a><a href="/albums">Albums</a><a href="/cleanup">Clean up</a><a href="/verify">Verify</a><a href="/sync">Family sync</a></nav><a class="syncchip" id="syncchip" href="/sync" hidden></a><span id="total" class="status"></span></header>
+<main>
+<form class="filters" id="filters" role="search" aria-label="Search and filters">
+  <div class="combo"><input id="q" type="search" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false"
+    aria-controls="suggest" aria-label="Search photos, people, places, tags, albums"
+    placeholder="Type a name, place, album, or describe it: &quot;dog in the snow&quot;">
+    <ul id="suggest" class="suggest" role="listbox" aria-label="Suggestions" hidden></ul></div>
+  <div id="dates"></div>
+  <select id="month" aria-label="Month"><option value="">Any month</option></select>
+  <select id="type" aria-label="Type"><option value="">Any type</option></select>
+  <select id="state" aria-label="State or region"><option value="">Any state/region</option></select>
+  <select id="place" aria-label="Place"><option value="">Any place</option></select>
+  <select id="person" aria-label="Person"><option value="">Anyone</option></select>
+  <select id="tag" aria-label="Tag"><option value="">Any tag</option></select>
+  <select id="album" aria-label="Album"><option value="">Any album</option></select>
+  <label><input type="checkbox" id="duplicates"> Duplicates only</label>
+  <label><input type="checkbox" id="unknown_date"> No date</label>
+  <button type="button" id="clear">Clear filters</button>
+  <button class="primary" id="go">Search</button>
+</form>
+<div class="status" id="status" role="status" aria-live="polite"></div>
+<div id="selbar"></div>
+<div id="grid"></div>
+<div class="loadmore"><button id="more" hidden>Load more</button></div>
+</main>
+<script src="/static/common.js"></script>
+<script src="/static/search.js"></script>
+</body></html>
