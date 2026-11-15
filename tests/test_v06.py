@@ -282,7 +282,7 @@ def test_videos_sync_last_chunked_and_checked(vsrc, tmp_path, pi, monkeypatch): 
     run(vsrc, out)
     db = DB(db_path(out))
     tok = app.family.new_token()
-    sync.update_config(out, {"pi_url": url, "token": tok, "max_mbps": 50, "include_full": True})
+    sync.update_config(out, {"network_sync": True, "pi_url": url, "token": tok, "max_mbps": 50, "include_full": True})
     monkeypatch.setattr(sync, "CHUNK", 64 * 1024)
     sent = []
     real = sync.Syncer.upload
@@ -357,3 +357,29 @@ def test_video_content_search_with_real_models(models_env, tmp_path):
     r = c.get("/api/search", params={"q": "a plain blue square", "media": "video"}).json()
     assert [i["filename"] for i in r["items"]][0] == "blue.mp4"
     assert all(i["media"] == "video" for i in r["items"])
+
+
+def test_network_sync_switch_off_by_default(tmp_path):
+    """v0.6: 'Sync to Pi over the network' is off unless turned on (existing settings files too); nothing is sent."""
+    out = tmp_path / "out"
+    (out / "_index").mkdir(parents=True)
+    (out / "_index" / "sync.json").write_text('{"pi_url": "https://pi.example.org", "enabled": true}')
+    sync.set_token(out, "t" * 43)
+    cfg = sync.load_config(out)
+    assert cfg["network_sync"] is False and sync.configured(out) and not sync.network_on(out)
+    assert "off" in sync.status(out)["line"]
+    with pytest.raises(ValueError):
+        sync.request_sync(out)
+    assert sync.request_after_run(out) is False
+
+    class NoNet:
+        def json(self, *a, **k):
+            raise AssertionError("must not touch the network while the switch is off")
+        request = json
+
+        def close(self):
+            pass
+    res = sync.Syncer(out, cfg, token="t" * 43, client=NoNet()).run()
+    assert res["ok"] is False and res.get("off")
+    assert sync.update_config(out, {"network_sync": True})["config"]["network_sync"] is True
+    assert sync.network_on(out)

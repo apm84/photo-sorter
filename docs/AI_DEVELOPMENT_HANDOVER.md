@@ -181,3 +181,8 @@
   copies `bin` (no ffplay) to `packaging/ffmpeg/bin`; the spec bundles it into `_internal/ffmpeg`; Inno installs
   `FFMPEG-LICENSE.txt`. The selftest JSON reports `ffmpeg` and `h264_encoder`. ci.yml installs Ubuntu's ffmpeg.
 - Tests: `tests/test_v06.py` (video tests skip without ffmpeg; the content-search test needs `PHOTOSORTER_TEST_MODELS`).
+
+### v0.6.0: network sync switch
+- `sync.json` key `network_sync` (default False; existing files without it read as False). `Syncer.run`,
+  `request_sync`, `request_after_run` and `daemon_main` do nothing while it's off; `status()["line"]` says "off".
+  The checkbox is injected by `sync.js` (sync.html is unchanged). Test: `test_network_sync_switch_off_by_default`.

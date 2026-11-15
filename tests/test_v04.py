@@ -396,7 +396,7 @@ def test_old_calendar_receiver_says_moved(tmp_path):
     try:
         out = tmp_path / "out"
         out.mkdir()
-        sync.update_config(out, {"pi_url": f"http://127.0.0.1:{httpd.server_address[1]}", "token": "t" * 43})
+        sync.update_config(out, {"network_sync": True, "pi_url": f"http://127.0.0.1:{httpd.server_address[1]}", "token": "t" * 43})
         res = sync.test_connection(out)
         assert not res["ok"] and "https://127.0.0.1:8443" in res["message"] and "Family Photos" in res["message"]
     finally:
@@ -413,7 +413,7 @@ def test_sync_end_to_end_resume_and_deletions(sample_src, tmp_path, pi, monkeypa
     al = albums.create_album(db, out, "Christmas 2021")
     albums.add_files(db, out, al["id"], [keep_id])
     tok = app.family.new_token()
-    sync.update_config(out, {"pi_url": url, "token": tok, "max_mbps": 50, "include_full": True})
+    sync.update_config(out, {"network_sync": True, "pi_url": url, "token": tok, "max_mbps": 50, "include_full": True})
     assert sync.test_connection(out)["ok"]
     monkeypatch.setattr(sync, "CHUNK", 8192)                 # many chunks per file
     before = tree_hashes(sample_src)
@@ -474,7 +474,7 @@ def test_sync_pause_and_wrong_token(sample_src, tmp_path, pi):
     out = tmp_path / "out"
     run(sample_src, out)
     app.family.new_token()
-    sync.update_config(out, {"pi_url": url, "token": "x" * 40})
+    sync.update_config(out, {"network_sync": True, "pi_url": url, "token": "x" * 40})
     res = sync.Syncer(out, run_mode="full").run()
     assert not res["ok"] and "pairing code" in res["error"]
     assert sync.read_state(out)["phase"] == "error"
@@ -503,7 +503,7 @@ def test_worker_lock_and_daemon_once(sample_src, tmp_path, pi):
     assert sync.worker_alive(out)
     assert sync.daemon_main(out, once=True) == 0              # another worker holds the lock: exits at once
     lk.release()
-    sync.update_config(out, {"pi_url": url, "token": app.family.new_token()})
+    sync.update_config(out, {"network_sync": True, "pi_url": url, "token": app.family.new_token()})
     assert sync.daemon_main(out, once=True, sleep=lambda s: None) == 0
     assert sync.read_state(out)["phase"] == "done"
     assert app.family.meta()["total"] > 0

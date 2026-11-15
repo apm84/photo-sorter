@@ -244,3 +244,5 @@ count. *Clean up > Clean up tasks > What Clean up has learned* shows it and has 
   `PHOTOSORTER_FFMPEG_DIR`); without it, videos are skipped.
 - Family sync sends full videos last, after all photos (needs Family Photos 1.1+). Turn it off with **Include videos**
   on the Family sync page.
+- **Sync to Pi over the network** (Family sync page) is off by default, including for existing installs; while it is
+  off nothing is sent to the Pi. Turn it on to use the photo (and video) sync described above.

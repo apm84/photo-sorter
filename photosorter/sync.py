@@ -65,7 +65,9 @@ DEFAULTS = {
     "interval_minutes": 60,        # look for changes this often while the worker runs
     "auto_after_run": True,        # start a sync after each sort run
     "verify_tls": True,
-    "include_videos": True,        # v0.6: full videos too, sent last (after every photo), same speed cap and window
+    "include_videos": True,
+    "network_sync": False,         # v0.6: "Sync to Pi over the network"; off by default (also for existing installs):
+                                   # nothing is sent to the Pi until the user turns it on        # v0.6: full videos too, sent last (after every photo), same speed cap and window
 }
 NAME_RE = re.compile(r"^[0-9a-f]{64}\.(t|p|o|f|v|x|catalog)\.[a-z0-9]{1,8}(\.gz)?$")   # v: video, x: its H.264 copy
 TOKEN_RE = re.compile(r"^[A-Za-z0-9_\-]{20,200}$")
@@ -145,6 +147,8 @@ def update_config(out, body: dict) -> dict:
     for k in ("enabled", "window_enabled", "include_full", "include_screenshots", "auto_after_run", "verify_tls"):
         if k in body:
             cfg[k] = bool(body[k])
+    if "network_sync" in body:      # v0.6
+        cfg["network_sync"] = bool(body["network_sync"])
     if "include_videos" in body:     # v0.6
         cfg["include_videos"] = bool(body["include_videos"])
     if "max_mbps" in body:
@@ -205,12 +209,23 @@ def status(out) -> dict:
     running = worker_alive(out)
     return {"config": cfg, "paired": bool(get_token(out)), "configured": configured(out), "state": st,
             "paused": bool(ctrl.get("paused")), "worker_running": running, "autostart": autostart_installed(),
-            "line": status_line(st, bool(ctrl.get("paused")), running, configured(out))}
+            "line": status_line(st, bool(ctrl.get("paused")), running, configured(out), bool(cfg.get("network_sync"))),
+            "network_sync": bool(cfg.get("network_sync"))}
 
 
-def status_line(st: dict, paused: bool, running: bool, is_configured: bool) -> str:
+def network_on(out) -> bool:
+    """v0.6: the "Sync to Pi over the network" switch (off unless the user turned it on)."""
+    return bool(load_config(out).get("network_sync"))
+
+
+OFF_MESSAGE = "Sync to Pi over the network is off. Turn it on in the Family sync settings to send photos to the Pi."
+
+
+def status_line(st: dict, paused: bool, running: bool, is_configured: bool, network: bool = True) -> str:
     if not is_configured:
         return "Family sync: not set up"
+    if not network:
+        return "Family sync: off (sync to Pi over the network is turned off)"
     last = st.get("last_ok_at")
     when = _fmt_when(last) if last else "never"
     if paused:
@@ -328,6 +343,8 @@ def spawn_worker(out) -> bool:
 def request_sync(out) -> dict:
     if not configured(out):
         raise ValueError("Set the calendar address and paste the pairing code first.")
+    if not network_on(out):
+        raise ValueError(OFF_MESSAGE)
     _update_control(out, now=time.time(), paused=False)
     started = spawn_worker(out)
     s = status(out)
@@ -337,7 +354,7 @@ def request_sync(out) -> dict:
 
 def request_after_run(out) -> bool:
     cfg = load_config(out)
-    if not (configured(out) and cfg["enabled"] and cfg["auto_after_run"]):
+    if not (configured(out) and cfg["enabled"] and cfg["auto_after_run"] and cfg.get("network_sync")):
         return False
     _update_control(out, now=time.time())
     spawn_worker(out)
@@ -829,6 +846,11 @@ class Syncer:
         return sent
 
     def run(self) -> dict:
+        if not self.cfg.get("network_sync"):     # v0.6: nothing goes over the network while the switch is off
+            self.client.close()
+            self.hc.close()
+            self.save_state(force=True, phase="off")
+            return {"ok": False, "error": OFF_MESSAGE, "off": True}
         t0 = self.clock()
         self.save_state(force=True, phase="checking", error=None, started_at=t0, bytes_sent=0,
                         remaining_items=None, remaining_bytes=None)
@@ -942,7 +964,7 @@ def daemon_main(out, once: bool = False, max_loops: int | None = None, sleep=tim
             cfg = load_config(out)
             ctrl = read_control(out)
             st = read_state(out)
-            if not configured(out):
+            if not configured(out) or not cfg.get("network_sync"):
                 if once:
                     break
                 sleep(10)

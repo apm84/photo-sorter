@@ -9,6 +9,14 @@
     $("include_screenshots").closest("label").after(l);
   }
   BOOLS.push("include_videos");
+  // v0.6: the network switch (off by default; the library can be copied to the Pi's drive by hand instead)
+  if (!$("network_sync") && $("pi_url")) {
+    const l = document.createElement("label"); l.className = "check";
+    l.innerHTML = `<input type="checkbox" id="network_sync"> <b>Sync to Pi over the network</b> (off: nothing is sent to the Pi)`;
+    const anchor = $("include_full") ? $("include_full").closest("label") : $("pi_url");
+    anchor.before(l);
+  }
+  BOOLS.push("network_sync");
   let timer = null, filled = false, cur = null;
 
   function render(s) {
