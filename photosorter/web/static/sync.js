@@ -2,6 +2,13 @@
 (() => {
   const {$, api, fmtBytes} = PS;
   const BOOLS = ["include_full", "include_screenshots", "window_enabled", "auto_after_run", "enabled", "verify_tls"];
+  // v0.6: full videos go last, after every photo (needs Family Photos 1.1 or later)
+  if (!$("include_videos") && $("include_screenshots")) {
+    const l = document.createElement("label"); l.className = "check";
+    l.innerHTML = `<input type="checkbox" id="include_videos"> Include videos (sent last, after all photos; needs Family Photos 1.1)`;
+    $("include_screenshots").closest("label").after(l);
+  }
+  BOOLS.push("include_videos");
   let timer = null, filled = false, cur = null;
 
   function render(s) {

@@ -143,3 +143,41 @@
 - Tests: `tests/test_v05.py`.
 - Untested on real hardware: DXGI probe on an RX 570, DirectML self-test, SmartScreen, the in-app silent upgrade
   while the sync worker runs, and Inno closing the running app.
+
+## 0.6.0: videos and Delete on selections
+
+- Delete: `cleanup.delete_files(db, out, ids)` (one `_Action` "delete N selected", so `/api/cleanup/undo` reverts it):
+  `_guard` each copy, drop People/album hard links, `remove_copy` (send2trash or `_index/_trash`), set
+  `dest_path=NULL, organized=1, is_keeper=0`, `file_review='remove'` (so runs don't re-copy and Verify says
+  `safe_deleted`), clear a group's `keeper_id` if it was the keeper. API: `POST /api/files/delete {file_ids, confirm}`
+  (X-PhotoSorter header). UI: `PS.selectionBar` adds Delete.../Undo delete for every grid; `PS.deleteFiles`, `PS.undoLast`.
+  Search/facets hide removed files (`NOT_REMOVED`).
+- Videos live in `files` (`media='video'`, `type='video'`, `duration`, `vcodec`, `acodec`, `playable`, `live`); per-video
+  cache data in the new `videos` table (`sig` = dHash per fixed frame, `hdr`, sprite layout, `proxy` state). Schema 5.
+  `faces.frame_t` = the second a video face was seen.
+- `photosorter/video.py`: finds ffmpeg/ffprobe (`PHOTOSORTER_FFMPEG_DIR` ("none" disables), `<install>/ffmpeg`,
+  `_MEIPASS/ffmpeg`, `packaging/ffmpeg/bin`, PATH); runs them hidden at lowered priority (`_popen_kw`). `probe()`
+  (duration, rotation-aware size, codecs, HDR, `creation_time` / Apple `creationdate`, ISO 6709 `location`/`©xyz`),
+  `browser_playable()` (H.264 + AAC/MP3, MP4/MOV, yuv420p, SDR), keyframe-seek `frame()`/`frames()` (HDR tonemapped
+  with zscale when present), `signature()`/`same_video()` (duration within max(1 s, 2%) and median dHash distance <= 10),
+  `make_sprite()` (<= 100 tiles, about 1/s, 160 px wide, 10 per row), `make_proxy()` (720p H.264, encoder order
+  h264_mf, h264_amf, h264_nvenc, h264_qsv, libopenh264, libx264, each probe-tested; `PHOTOSORTER_H264_ENCODER`),
+  `Jobs` (one low-priority thread for on-demand sprites/proxies from the web UI).
+- Pipeline: scan includes `VIDEO_EXTS` when `use_videos` and ffmpeg exist; analyze uses `analyze_video`; Live Photo
+  clips (same stem as a photo, <= 4.5 s) get `live=1`; embed = mean SigLIP 2 vector over `sample_times()` frames;
+  faces = YuNet/SFace on the same frames, one face per person per video (`pick_video_faces`, cosine >= 0.45), crops in
+  `_index/thumbs/faces`; dedupe adds `_video_pairs` (signature + embedding cosine >= 0.85 when both exist); new stage
+  `videos` makes sprites then proxies (respects `IdleGate`). Organize is unchanged (videos sort like photos).
+- Web: `/videos` (`videos.html/js`), `/watch?id=` (`watch.html/js`; Up next list from sessionStorage `ps-upnext`, else
+  `/api/search?media=video`), `/api/video/{id}`, `/video/{id}/stream` (original if playable, else proxy; Range via
+  Starlette `FileResponse`), `/video/{id}/original`, `/video/{id}/sprite.jpg`, `/video/{id}/thumbs.vtt`.
+  `/api/search` gains `media=video|photo` and `hide_live`. The Videos nav link is added by `common.js` so the older
+  page templates stay as they were.
+- Sync: catalog records for videos carry `mv:"video"`, `du`, `pb`, `v` (`<sha>.v.<ext>`, the full video) and `x`
+  (`<sha of proxy>.x.mp4`, only for non-playable videos with a proxy). Order f, t, p, o, x, v (videos last). Only sent
+  when the Pi's `/api/photosync/status` says `videos: true` (Family Photos 1.1) and `include_videos` is on.
+  Live Photo clips are skipped unless they are in an album.
+- Packaging: release.yml downloads BtbN `ffmpeg-n8.1-latest-win64-lgpl-shared-8.1.zip`, refuses GPL/nonfree builds,
+  copies `bin` (no ffplay) to `packaging/ffmpeg/bin`; the spec bundles it into `_internal/ffmpeg`; Inno installs
+  `FFMPEG-LICENSE.txt`. The selftest JSON reports `ffmpeg` and `h264_encoder`. ci.yml installs Ubuntu's ffmpeg.
+- Tests: `tests/test_v06.py` (video tests skip without ffmpeg; the content-search test needs `PHOTOSORTER_TEST_MODELS`).

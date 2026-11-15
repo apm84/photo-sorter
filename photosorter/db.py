@@ -122,17 +122,34 @@ CREATE TABLE IF NOT EXISTS keep_decisions (
     created_at TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_keep_decisions_action ON keep_decisions(action_id);
+-- v0.6: per-video extras (files.media='video'): duplicate signature, scrub sprite, browser-playable proxy
+CREATE TABLE IF NOT EXISTS videos (
+    file_id INTEGER PRIMARY KEY,
+    sig TEXT,                     -- JSON list of frame dHashes at fixed positions (near-duplicate check)
+    hdr INTEGER DEFAULT 0,
+    sprite_n INTEGER,             -- scrub/hover sprite sheet: frames, columns, seconds per frame, tile size
+    sprite_cols INTEGER,
+    sprite_interval REAL,
+    tile_w INTEGER,
+    tile_h INTEGER,
+    proxy TEXT,                   -- NULL (not made), 'ok', 'failed', 'not_needed'
+    proxy_error TEXT
+);
 """
 
-SCHEMA_VERSION = "4"
+SCHEMA_VERSION = "5"
 
 # Columns added after v0.1. connect() adds any that an older index is missing (no data is rewritten).
 MIGRATIONS = {
     "dup_groups": [("suggested_keeper_id", "INTEGER"), ("note", "TEXT")],
     "faces": [("locked", "INTEGER DEFAULT 0"), ("not_person", "INTEGER"),
               ("face_px", "REAL"), ("blur", "REAL"), ("low_quality", "INTEGER DEFAULT 0"),
-              ("suggest_person", "INTEGER"), ("suggest_sim", "REAL")],
+              ("suggest_person", "INTEGER"), ("suggest_sim", "REAL"),
+              ("frame_t", "REAL")],          # v0.6: video faces: seconds into the video of the sampled frame
     "people": [("refs", "BLOB"), ("ref_count", "INTEGER DEFAULT 0"), ("negs", "BLOB")],
+    # v0.6 videos: media='video' (NULL = photo), length, codecs, browser-playable as is, Live Photo clip
+    "files": [("media", "TEXT"), ("duration", "REAL"), ("vcodec", "TEXT"), ("acodec", "TEXT"),
+              ("playable", "INTEGER"), ("live", "INTEGER DEFAULT 0")],
 }
 
 
@@ -151,6 +168,7 @@ def migrate(conn: sqlite3.Connection) -> list[str]:
     conn.execute("CREATE INDEX IF NOT EXISTS ix_files_taken_id ON files(taken_at, id)")
     conn.execute("CREATE INDEX IF NOT EXISTS ix_faces_person_file ON faces(person_id, file_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS ix_files_rep ON files(rep_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_files_media ON files(media)")
     # v0.3: a face removed from a person (faces.not_person) becomes a negative example for that person
     conn.execute("INSERT OR IGNORE INTO face_negatives(face_id, person_id, created_at) "
                  "SELECT id, not_person, NULL FROM faces WHERE not_person IS NOT NULL")

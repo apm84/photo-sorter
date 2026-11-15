@@ -3,6 +3,12 @@
   const {$, esc, api, fmtBytes} = PS;
   let offset = 0, timer = null, last = null;
   const ORDER = ["safe_copy", "safe_deduped", "missing", "near_only"];
+  // v0.6: files deleted on purpose with Delete on a selection
+  ORDER.splice(2, 0, "safe_deleted");
+  if ($("bucket") && ![...$("bucket").options].some(o => o.value === "safe_deleted")) {
+    const o = document.createElement("option"); o.value = "safe_deleted"; o.textContent = "Deleted on purpose";
+    $("bucket").insertBefore(o, $("bucket").querySelector('option[value="safe_copy"]'));
+  }
 
   function render(s) {
     last = s;

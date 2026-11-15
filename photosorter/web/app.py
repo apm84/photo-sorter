@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from ..config import db_path, index_dir
 from ..db import DB, blob_to_vec
 from ..imaging import open_image
-from .. import albums, cleanup, thumbs as thumbcache
+from .. import albums, cleanup, thumbs as thumbcache, video
 from ..facegroup import METHODS, add_negative, quality_thresholds
 from ..pipeline import build_people_folders, cluster_faces, face_cluster_params, refresh_people
 
@@ -67,6 +67,11 @@ class AlbumBody(BaseModel):
     name: str
 
 
+class DeleteBody(BaseModel):
+    file_ids: list[int]
+    confirm: bool = False
+
+
 class AlbumFilesBody(BaseModel):
     file_ids: list[int]
     album: int | None = None           # existing album, or
@@ -77,7 +82,7 @@ DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 BROWSER_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
 IMMUTABLE = "public, max-age=31536000, immutable"
 GZIP_PATHS = ("/api/", "/static/")
-GZIP_PAGES = {"/", "/people", "/albums", "/cleanup", "/verify", "/sync"}
+GZIP_PAGES = {"/", "/people", "/albums", "/cleanup", "/verify", "/sync", "/videos", "/watch"}
 
 
 class SelectiveGZip:
@@ -104,7 +109,12 @@ def cached_image(request: Request, p: Path, tag: str, media_type: str, cache_con
     return FileResponse(p, media_type=media_type, headers=headers)
 
 
-VISIBLE = "(f.is_keeper IS NULL OR f.is_keeper=1) AND (f.rep_id IS NULL OR f.rep_id=f.id)"
+NOT_REMOVED = "NOT EXISTS (SELECT 1 FROM file_review fr WHERE fr.file_id=f.id AND fr.state='remove')"
+VISIBLE = f"(f.is_keeper IS NULL OR f.is_keeper=1) AND (f.rep_id IS NULL OR f.rep_id=f.id) AND {NOT_REMOVED}"
+SEARCH_COLS = ("f.id, f.filename, f.taken_at, f.place, f.type, f.width, f.height, f.dest_path, f.src_path, "
+               "f.dup_group, f.is_keeper, f.media, f.duration, f.live, vv.sprite_n, vv.sprite_cols, vv.sprite_interval, "
+               "vv.tile_w, vv.tile_h, CAST(COALESCE(f.mtime, 0) AS INTEGER) || '-' || COALESCE(f.size, 0) AS v")
+SEARCH_FROM = " FROM files f LEFT JOIN videos vv ON vv.file_id=f.id"
 
 
 def create_app(output_root: str | Path, enable_ai: bool = True) -> FastAPI:
@@ -116,6 +126,8 @@ def create_app(output_root: str | Path, enable_ai: bool = True) -> FastAPI:
     thumbs.mkdir(exist_ok=True)
     app = FastAPI(title="Photo Sorter", docs_url=None, redoc_url=None)
     state = {"clip": None, "clip_tried": False, "emb_count": -1, "ids": None, "mat": None, "text_cache": {}}
+    jobs = video.Jobs(db, out)          # v0.6: on-demand video sprites / playable copies (one low-priority thread)
+    app.state.video_jobs = jobs
     lock = threading.Lock()
     app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
     app.add_middleware(SelectiveGZip)
@@ -184,6 +196,14 @@ def create_app(output_root: str | Path, enable_ai: bool = True) -> FastAPI:
     def albums_page():
         return (STATIC / "albums.html").read_text(encoding="utf-8")
 
+    @app.get("/videos", response_class=HTMLResponse)
+    def videos_page():
+        return (STATIC / "videos.html").read_text(encoding="utf-8")
+
+    @app.get("/watch", response_class=HTMLResponse)
+    def watch_page():
+        return (STATIC / "watch.html").read_text(encoding="utf-8")
+
     def text_vec(clip, q: str):
         cache = state["text_cache"]
         key = q.strip().lower()
@@ -202,7 +222,8 @@ def create_app(output_root: str | Path, enable_ai: bool = True) -> FastAPI:
 
     @app.get("/api/facets")
     def facets():
-        vis = "(is_keeper IS NULL OR is_keeper=1) AND (rep_id IS NULL OR rep_id=id)"
+        vis = ("(is_keeper IS NULL OR is_keeper=1) AND (rep_id IS NULL OR rep_id=id) AND NOT EXISTS "
+               "(SELECT 1 FROM file_review fr WHERE fr.file_id=files.id AND fr.state='remove')")
         q = lambda sql: [dict(r) for r in db.query(sql)]
         return {
             "types": q(f"SELECT type AS value, COUNT(*) AS n FROM files WHERE {vis} GROUP BY type ORDER BY n DESC"),
@@ -220,13 +241,17 @@ def create_app(output_root: str | Path, enable_ai: bool = True) -> FastAPI:
             "albums": [{"value": a["id"], "label": a["name"], "n": a["count"]} for a in albums.list_albums(db)],
             "clip_search": get_clip() is not None,
             "total": db.one("SELECT COUNT(*) FROM files")[0],
+            "videos": db.one(f"SELECT COUNT(*) FROM files WHERE media='video' AND {vis}")[0],
+            "live_videos": db.one(f"SELECT COUNT(*) FROM files WHERE media='video' AND live=1 AND {vis}")[0],
+            "ffmpeg": video.available(),
         }
 
     @app.get("/api/search")
     def search(q: str = "", type: str = "", year: str = "", month: str = "", place: str = "", state_: str = Query("", alias="state"),
                country: str = "", person: int | None = None, tag: str = "", duplicates: bool = False,
                unknown_date: bool = False, album: int | None = None, date_from: str = "", date_to: str = "",
-               ids_only: bool = False, limit: int = Query(120, le=1000), offset: int = 0, after: str = ""):
+               ids_only: bool = False, limit: int = Query(120, le=1000), offset: int = 0, after: str = "",
+               media: str = "", hide_live: bool = False):
         """Photos matching the filters, newest first. Page with `after` (the `next` cursor of the previous page,
         keyset paging: fast at any depth) or `offset`. The total is only counted for the first page."""
         where, params = [], []
@@ -241,6 +266,12 @@ def create_app(output_root: str | Path, enable_ai: bool = True) -> FastAPI:
         for col, val in (("f.type", type), ("f.place", place), ("f.state", state_), ("f.country", country)):
             if val:
                 where.append(f"{col}=?"); params.append(val)
+        if media == "video":                 # v0.6 Videos tab
+            where.append("f.media='video'")
+        elif media == "photo":
+            where.append("f.media IS NULL")
+        if hide_live:
+            where.append("COALESCE(f.live, 0)=0")
         if year:
             where.append("substr(f.taken_at,1,4)=?"); params.append(year)
         if month:
@@ -281,8 +312,7 @@ def create_app(output_root: str | Path, enable_ai: bool = True) -> FastAPI:
                          "OR EXISTS (SELECT 1 FROM album_items i JOIN albums a ON a.id=i.album_id "
                          "WHERE i.file_id=f.id AND a.name LIKE ?))")
             params += [like, like, like, like, like]
-        sql = ("SELECT f.id, f.filename, f.taken_at, f.place, f.type, f.width, f.height, f.dest_path, f.src_path, "
-               "f.dup_group, f.is_keeper, CAST(COALESCE(f.mtime, 0) AS INTEGER) || '-' || COALESCE(f.size, 0) AS v FROM files f")
+        sql = "SELECT " + SEARCH_COLS + SEARCH_FROM
         keyset = clip is None and not ids_only and not (duplicates and album is None)
         count_where, count_params = list(where), list(params)
         if keyset and after:
@@ -312,13 +342,11 @@ def create_app(output_root: str | Path, enable_ai: bool = True) -> FastAPI:
             items = [{**dict(r), "score": round(s, 4)} for s, r in page]
         else:
             if ids_only:
-                rows = db.query(sql.replace("SELECT f.id, f.filename, f.taken_at, f.place, f.type, f.width, f.height, "
-                                            "f.dest_path, f.src_path, f.dup_group, f.is_keeper", "SELECT f.id", 1)
-                                + order + " LIMIT 50000", params)
+                rows = db.query(sql.replace("SELECT " + SEARCH_COLS, "SELECT f.id", 1) + order + " LIMIT 50000", params)
                 return {"total": len(rows), "ids": [r[0] for r in rows]}
             total = None
             if not (keyset and after):
-                cnt = "SELECT COUNT(*) FROM files f" + (" WHERE " + " AND ".join(count_where) if count_where else "")
+                cnt = "SELECT COUNT(*)" + SEARCH_FROM + (" WHERE " + " AND ".join(count_where) if count_where else "")
                 total = db.one(cnt, count_params)[0]
             rows = db.query(sql + order + " LIMIT ? OFFSET ?", params + [limit, offset])
             items = [dict(r) for r in rows]
@@ -407,7 +435,10 @@ def create_app(output_root: str | Path, enable_ai: bool = True) -> FastAPI:
                                 "public, max-age=86400")
         r = file_row(fa["file_id"])
         try:
-            im = open_image(best_path(r), max_side=1600)
+            if r["media"] == "video":        # v0.6: the sampled frame the face was found in
+                im = video.frame(best_path(r), fa["frame_t"] or 0.0, 1600)
+            else:
+                im = open_image(best_path(r), max_side=1600)
         except Exception:
             raise HTTPException(404)
         W, H = im.size
@@ -606,6 +637,108 @@ def create_app(output_root: str | Path, enable_ai: bool = True) -> FastAPI:
         st = cluster_faces(db, eps, ms, method)
         db.set_meta("clustered_face_count", db.one("SELECT COUNT(*) FROM faces")[0])
         return {"ok": True, "people": db.one("SELECT COUNT(*) FROM people")[0], **st}
+
+    # ---- videos (v0.6) ----------------------------------------------------------------------------------
+    VIDEO_TYPES = {".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/mp4", ".webm": "video/webm",
+                   ".mkv": "video/x-matroska", ".3gp": "video/3gpp", ".avi": "video/x-msvideo"}
+
+    def video_row(fid: int):
+        r = db.one("SELECT f.*, v.hdr, v.sprite_n, v.proxy, v.proxy_error FROM files f LEFT JOIN videos v "
+                   "ON v.file_id=f.id WHERE f.id=?", (fid,))
+        if not r or r["media"] != "video":
+            raise HTTPException(404, "not a video")
+        return r
+
+    def video_info(fid: int) -> dict:
+        """Player state: how it streams (as is / playable copy / being made), the scrub sprite, people."""
+        r = video_row(fid)
+        st = video.proxy_state(db, out, fid)
+        if st == "missing" and video.available() and not jobs.busy("proxy", fid):
+            jobs.submit("proxy", fid)               # made in the background, then the page starts playing
+        preparing = st == "missing" and (jobs.busy("proxy", fid) or video.available())
+        meta = None
+        if r["sprite_n"] and video.sprite_path(out, fid).exists():
+            meta = video.ensure_sprite(db, out, fid)
+        elif video.available() and not jobs.busy("sprite", fid):
+            jobs.submit("sprite", fid)
+        return {"id": fid, "duration": r["duration"], "width": r["width"], "height": r["height"],
+                "vcodec": r["vcodec"], "acodec": r["acodec"], "playable": bool(r["playable"]), "proxy": st,
+                "ready": st in ("not_needed", "ok"), "preparing": bool(preparing and st == "missing"),
+                "stream": f"/video/{fid}/stream" if st in ("not_needed", "ok") else None,
+                "error": r["proxy_error"] if st == "failed" else None,
+                "sprite": {**meta, "url": f"/video/{fid}/sprite.jpg"} if meta else None,
+                "live": bool(r["live"]), "ffmpeg": video.available()}
+
+    @app.get("/api/video/{fid}")
+    def api_video(fid: int):
+        r = dict(file_row(fid))
+        if r.get("media") != "video":
+            raise HTTPException(404, "not a video")
+        info = video_info(fid)
+        info.update({k: r[k] for k in ("filename", "taken_at", "place", "dest_path", "size", "camera_make",
+                                       "camera_model")})
+        info["people"] = [dict(p) for p in db.query(
+            "SELECT p.id, COALESCE(NULLIF(p.name,''), 'Person ' || p.id) AS label, MIN(fa.frame_t) AS t FROM faces fa "
+            "JOIN people p ON p.id=fa.person_id WHERE fa.file_id=? AND p.hidden=0 GROUP BY p.id ORDER BY t",
+            (r["rep_id"] or fid,))]
+        info["tags"] = [t[0] for t in db.query("SELECT tag FROM tags WHERE file_id=? ORDER BY score DESC LIMIT 8",
+                                               (r["rep_id"] or fid,))]
+        return info
+
+    @app.get("/video/{fid}/stream")
+    def video_stream(fid: int):
+        """The video for the player (HTTP range requests, so seeking works): the file as it is when browsers play
+        it, else the H.264 copy in _index/video. Both only read."""
+        r = video_row(fid)
+        st = video.proxy_state(db, out, fid)
+        if st == "not_needed":
+            p = best_path(r)
+            if not p.exists():
+                raise HTTPException(404, "file not found")
+            return FileResponse(p, media_type=VIDEO_TYPES.get(p.suffix.lower(), "video/mp4"),
+                                headers={"Cache-Control": "private, max-age=3600"})
+        if st == "ok":
+            return FileResponse(video.proxy_path(out, fid), media_type="video/mp4",
+                                headers={"Cache-Control": "private, max-age=3600"})
+        raise HTTPException(409, "a playable copy is being made")
+
+    @app.get("/video/{fid}/original")
+    def video_original(fid: int):
+        r = video_row(fid)
+        p = best_path(r)
+        if not p.exists():
+            raise HTTPException(404, "file not found")
+        return FileResponse(p, filename=r["filename"], content_disposition_type="inline",
+                            media_type=VIDEO_TYPES.get(p.suffix.lower(), "application/octet-stream"))
+
+    @app.get("/video/{fid}/sprite.jpg")
+    def video_sprite(fid: int, request: Request):
+        video_row(fid)
+        meta = video.ensure_sprite(db, out, fid)
+        if not meta:
+            raise HTTPException(404, "no preview")
+        p = video.sprite_path(out, fid)
+        st = p.stat()
+        return cached_image(request, p, f'"sprite-{fid}-{int(st.st_mtime)}-{st.st_size}"', "image/jpeg",
+                            "public, max-age=86400")
+
+    @app.get("/video/{fid}/thumbs.vtt")
+    def video_vtt(fid: int):
+        r = video_row(fid)
+        meta = video.ensure_sprite(db, out, fid)
+        if not meta:
+            raise HTTPException(404, "no preview")
+        return Response(video.vtt(meta, f"/video/{fid}/sprite.jpg", r["duration"]), media_type="text/vtt")
+
+    # ---- delete selected (v0.6) ---------------------------------------------------------------------------
+    @app.post("/api/files/delete")
+    def files_delete(body: DeleteBody, x_photosorter: str | None = Header(None)):
+        """Selected photos/videos: their sorted copies go to the Recycle Bin (never the originals). Undo with
+        /api/cleanup/undo (the Undo button)."""
+        require_local_header(x_photosorter)
+        if not body.confirm:
+            raise HTTPException(400, "confirmation required")
+        return cleanup_call(cleanup.delete_files, body.file_ids)
 
     # ---- duplicate clean-up ------------------------------------------------------------------------------
     def cleanup_call(fn, *a):

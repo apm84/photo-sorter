@@ -7,6 +7,10 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".webp", ".gif", ".bmp", ".tif", ".tiff"}
+# v0.6: videos are sorted, searched and played too (needs ffmpeg/ffprobe, bundled with the installer)
+VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".3gp", ".3g2", ".avi", ".mkv", ".webm", ".mts", ".m2ts", ".wmv", ".mpg",
+              ".mpeg"}
+MEDIA_EXTS = IMAGE_EXTS | VIDEO_EXTS
 
 INDEX_DIRNAME = "_index"
 DB_FILENAME = "photosorter.sqlite"
@@ -119,6 +123,10 @@ class Settings:
     # "lowest" (idle priority) or "full" (every core, normal priority)
     run_mode: str = "background"
     idle_resume_s: int = 30               # background work resumes after this many seconds without input
+    # v0.6 videos
+    use_videos: bool = True               # scan, copy, search and play videos (skipped if ffmpeg is missing)
+    video_frames: int = 8                 # frames sampled per video for faces, AI search and duplicates (max)
+    video_proxies: bool = True            # make a small H.264 copy in _index for videos a browser can't play
 
     def to_dict(self) -> dict:
         return asdict(self)

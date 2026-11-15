@@ -1,0 +1,50 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Photo Sorter - Video</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/static/style.css"><link rel="icon" href="data:,"></head>
+<body><header><h1>Photo Sorter</h1><nav aria-label="Pages"><a href="/">Search</a><a href="/videos" aria-current="page">Videos</a><a href="/people">People</a><a href="/albums">Albums</a><a href="/cleanup">Clean up</a><a href="/verify">Verify</a><a href="/sync">Family sync</a></nav><a class="syncchip" id="syncchip" href="/sync" hidden></a></header>
+<main class="watch">
+  <section class="watch-main" aria-label="Video">
+    <div class="player" id="player">
+      <video id="video" playsinline preload="metadata"></video>
+      <div class="player-wait" id="wait" hidden></div>
+      <div class="player-next" id="nextbox" hidden>
+        <p>Up next in <span id="nextcount">5</span></p>
+        <p class="player-next-title" id="nexttitle"></p>
+        <div class="row"><button type="button" id="nextcancel">Cancel</button><button type="button" class="primary" id="nextnow">Play now</button></div>
+      </div>
+      <div class="controls" id="controls">
+        <div class="seek" id="seek" role="slider" tabindex="0" aria-label="Seek" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0" aria-valuetext="0:00">
+          <div class="seek-buf" id="seekbuf"></div><div class="seek-fill" id="seekfill"></div><div class="seek-knob" id="seekknob"></div>
+          <div class="seek-tip" id="seektip" hidden><div class="seek-thumb" id="seekthumb"></div><span id="seektime"></span></div>
+        </div>
+        <div class="controls-row">
+          <button type="button" id="play" aria-label="Play (K)">&#9654;</button>
+          <button type="button" id="nextbtn" aria-label="Next video (Shift+N)">&#9197;</button>
+          <button type="button" id="mute" aria-label="Mute (M)">&#128266;</button>
+          <input type="range" id="volume" min="0" max="1" step="0.05" value="1" aria-label="Volume">
+          <span class="ctime" id="ctime">0:00 / 0:00</span>
+          <span class="spacer"></span>
+          <label class="autoplay"><input type="checkbox" id="autoplay" checked> Autoplay</label>
+          <button type="button" id="fullscreen" aria-label="Full screen (F)">&#x26F6;</button>
+        </div>
+      </div>
+    </div>
+    <h2 id="title" class="watch-title"></h2>
+    <p id="meta" class="watch-meta"></p>
+    <div id="people" class="watch-people" aria-label="People in this video"></div>
+    <div class="row-actions">
+      <button type="button" id="folder">Show in folder</button>
+      <a class="button" id="original" target="_blank" rel="noopener">Open original</a>
+      <button type="button" id="addalbum">Add to album...</button>
+      <button type="button" id="delete" class="danger">Delete...</button>
+      <button type="button" id="undo" hidden>Undo delete</button>
+    </div>
+    <p class="status" id="status" role="status" aria-live="polite"></p>
+  </section>
+  <aside class="upnext" aria-labelledby="upnext-h">
+    <h2 id="upnext-h">Up next</h2>
+    <ol id="upnext" class="upnext-list"></ol>
+  </aside>
+</main>
+<script src="/static/common.js"></script>
+<script src="/static/watch.js"></script>
+</body></html>

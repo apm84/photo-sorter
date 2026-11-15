@@ -18,21 +18,23 @@ import numpy as np
 
 from . import background
 from . import classify as cls
-from .config import IMAGE_EXTS, INDEX_DIRNAME, Settings, db_path, index_dir
+from . import video
+from .config import IMAGE_EXTS, INDEX_DIRNAME, VIDEO_EXTS, Settings, db_path, index_dir
 from .db import DB, blob_to_vec, to_signed64, vec_to_blob
 from .dedupe import UnionFind, near_pairs, pick_keeper
 from .facegroup import (DETECT_MAX_SIDE, backfill_face_px, blur_score, cluster_faces,  # noqa: F401 (re-exported)
                         face_cluster_params, refresh_people)
 from .geo import reverse_geocode, safe_name
-from .imaging import analyze_file, date_from_filename, open_image, unreadable_reason
+from .imaging import analyze_file, date_from_filename, open_image, sniff_kind, unreadable_reason
 
 log = logging.getLogger("photosorter")
 
-STAGES = ["scan", "analyze", "geocode", "embed", "classify", "faces", "people", "dedupe", "organize", "thumbs"]
+STAGES = ["scan", "analyze", "geocode", "embed", "classify", "faces", "people", "dedupe", "organize", "thumbs",
+          "videos"]
 STAGE_LABELS = {
     "scan": "Scan folders", "analyze": "Hash + EXIF", "geocode": "Places (offline)", "embed": "Image AI",
     "classify": "Type + tags", "faces": "Faces", "people": "Group people", "dedupe": "Duplicates",
-    "organize": "Copy into tree", "thumbs": "Thumbnails",
+    "organize": "Copy into tree", "thumbs": "Thumbnails", "videos": "Video previews",
 }
 TYPE_FOLDERS = {"screenshot": "Screenshots", "meme": "Memes", "document": "Documents", "graphic": "Graphics"}
 SKIP_DIRS = {"$recycle.bin", "system volume information", INDEX_DIRNAME.lower(), ".thumbnails", "@eadir"}
@@ -67,6 +69,8 @@ class Pipeline:
         self._faces = None
         self.workers = background.worker_count(settings)
         self.gate = background.IdleGate(settings.run_mode, settings.idle_resume_s, stop=self._stop)
+        # v0.6: videos need ffmpeg/ffprobe (bundled with the installer); without them they are left alone
+        self.videos_on = bool(getattr(settings, "use_videos", True)) and video.available()
         self._check_model_changes()
 
     def _check_model_changes(self):
@@ -168,6 +172,7 @@ class Pipeline:
             "faces": q("SELECT COUNT(*) FROM faces"),
             "people": q("SELECT COUNT(*) FROM people"),
             "copied": q("SELECT COUNT(*) FROM files WHERE dest_path IS NOT NULL"),
+            "videos": q("SELECT COUNT(*) FROM files WHERE media='video'"),
             "types": types,
         }
 
@@ -175,8 +180,11 @@ class Pipeline:
     def stage_scan(self):
         known = {r["src_path"]: (r["size"], r["mtime"]) for r in self.db.query("SELECT src_path, size, mtime FROM files")}
         out_resolved = self.out.resolve()
-        found = new = changed = 0
+        found = new = changed = nvid = 0
         batch = []
+        exts = IMAGE_EXTS | VIDEO_EXTS if self.videos_on else IMAGE_EXTS
+        if getattr(self.s, "use_videos", True) and not self.videos_on:
+            self.info("Videos: skipped (ffmpeg/ffprobe not found; the installer includes them)")
         for root in self.s.sources:
             root_p = Path(root)
             if not root_p.is_dir():
@@ -194,8 +202,9 @@ class Pipeline:
                 dirnames[:] = [d for d in dirnames if d.lower() not in SKIP_DIRS and not d.startswith(".")]
                 for fn in filenames:
                     ext = os.path.splitext(fn)[1].lower()
-                    if ext not in IMAGE_EXTS or fn.startswith("._"):
+                    if ext not in exts or fn.startswith("._"):
                         continue
+                    nvid += ext in VIDEO_EXTS
                     p = str(dp / fn)
                     try:
                         st = os.stat(p)
@@ -220,7 +229,9 @@ class Pipeline:
         self._insert_scanned(batch)
         self.db.commit()
         self.progress("scan", found, found)
-        self.info("Scan: %d images found (%d new, %d changed)", found, new, changed)
+        self.info("Scan: %d images found (%d new, %d changed)", found - nvid, new, changed)
+        if nvid:
+            self.info("Scan: %d videos found (counted separately from images)", nvid)
 
     def _insert_scanned(self, batch):
         if batch:
@@ -240,6 +251,8 @@ class Pipeline:
             if n:
                 self.info("Analyze: retrying %d files that could not be read before", n)
         rows = self.db.query("SELECT id, src_path, filename, mtime FROM files WHERE analyzed=0 ORDER BY id")
+        if not self.videos_on:      # videos indexed while ffmpeg was there wait until it is back
+            rows = [r for r in rows if not video.is_video_path(r["src_path"])]
         if rows:
             self.info("HEIC/HEIF support: %s", f"on (pillow-heif {heif})" if heif else
                       "OFF (pillow-heif not installed; run Setup-PhotoSorter.bat)")
@@ -247,9 +260,17 @@ class Pipeline:
         done = errors = 0
 
         def work(r):
+            p = Path(r["src_path"])
             try:
-                return r, analyze_file(Path(r["src_path"])), None
+                if self.videos_on and video.is_video_path(p):
+                    return r, video.analyze_video(p), None
+                return r, analyze_file(p), None
             except Exception as e:  # unreadable / corrupt
+                if self.videos_on and not video.is_video_path(p) and sniff_kind(p) == "video":
+                    try:                # v0.6: a video saved with a photo extension is sorted as a video
+                        return r, video.analyze_video(p), None
+                    except Exception:
+                        pass
                 return r, None, f"{type(e).__name__}: {e}"
 
         with ThreadPoolExecutor(max_workers=self.workers) as ex:
@@ -261,25 +282,33 @@ class Pipeline:
                         self.db.execute("UPDATE files SET analyzed=-1, error=? WHERE id=?", (err[:500], r["id"]))
                         log.warning("Unreadable: %s (%s)", r["src_path"], unreadable_reason(Path(r["src_path"]), err))
                         continue
-                    dt, src = res["taken_at"], "exif"
+                    is_vid = res.get("media") == "video"
+                    dt, src = res["taken_at"], ("metadata" if is_vid else "exif")
                     if dt is None:
                         dt, src = date_from_filename(r["filename"]), "filename"
-                    if dt is None and self.s.mtime_date_fallback:
-                        dt, src = datetime.fromtimestamp(r["mtime"]), "mtime"
+                    if dt is None and (self.s.mtime_date_fallback or is_vid):
+                        dt, src = datetime.fromtimestamp(r["mtime"]), "mtime"   # videos: always fall back
                     if dt is None:
                         src = None
                     self.db.execute(
                         "UPDATE files SET size=?, mtime=?, sha256=?, width=?, height=?, format=?, taken_at=?, date_source=?, "
                         "camera_make=?, camera_model=?, software=?, lat=?, lon=?, phash=?, dhash=?, analyzed=1, error=NULL, "
+                        "media=?, duration=?, vcodec=?, acodec=?, playable=?, "
                         "organized=CASE WHEN dest_path LIKE 'Other%' THEN 0 ELSE organized END WHERE id=?",
                         (res["size"], res["mtime"], res["sha256"], res["width"], res["height"], res["format"],
                          dt.isoformat(timespec="seconds") if dt else None, src, res["camera_make"], res["camera_model"],
-                         res["software"], res["lat"], res["lon"], to_signed64(res["phash"]), to_signed64(res["dhash"]),
-                         r["id"]))
+                         res["software"], res["lat"], res["lon"],
+                         None if res["phash"] is None else to_signed64(res["phash"]),
+                         None if res["dhash"] is None else to_signed64(res["dhash"]),
+                         "video" if is_vid else None, res.get("duration"), res.get("vcodec"), res.get("acodec"),
+                         (1 if res.get("playable") else 0) if is_vid else None, r["id"]))
+                    if is_vid:
+                        self._reset_video_cache(r["id"], res)
                     done += 1
                 self.db.commit()
                 self.progress("analyze", done + errors, total, errors=errors)
         self._assign_reps()
+        self._mark_live_photos()
         self.progress("analyze", total, total, errors=errors)
         self.info("Analyze: %d files read, %d unreadable", done, errors)
         n, kinds = write_unreadable_report(self.db, self.out)
@@ -287,6 +316,26 @@ class Pipeline:
             self.info("Unreadable files: %d in total (%s); list: %s", n,
                       ", ".join(f"{c} {k}" for k, c in kinds.most_common(4)),
                       str(index_dir(self.out) / "reports" / "unreadable.csv"))
+
+    def _reset_video_cache(self, fid: int, res: dict):
+        """A (re)analyzed video: fresh signature, and its old sprite/proxy are dropped (made again later)."""
+        self.db.execute("INSERT OR REPLACE INTO videos(file_id, sig, hdr) VALUES(?,?,?)",
+                        (fid, json.dumps(res.get("sig") or []), 1 if res.get("hdr") else 0))
+        for p in (video.sprite_path(self.out, fid), video.proxy_path(self.out, fid)):
+            p.unlink(missing_ok=True)
+
+    def _mark_live_photos(self):
+        """iPhone Live Photos come as IMG_1234.HEIC + IMG_1234.MOV (a ~3 s clip): mark those clips so the Videos
+        tab can hide them. They are still copied and searchable like any video."""
+        vids = self.db.query("SELECT id, src_path, duration FROM files WHERE media='video' AND analyzed=1")
+        if not vids:
+            return
+        stems = {os.path.splitext(r[0])[0].lower() for r in self.db.query(
+            "SELECT src_path FROM files WHERE media IS NULL AND analyzed=1")}
+        upd = [(1 if (v["duration"] or 99) <= 4.5 and os.path.splitext(v["src_path"])[0].lower() in stems else 0,
+                v["id"]) for v in vids]
+        self.db.executemany("UPDATE files SET live=? WHERE id=?", upd)
+        self.db.commit()
 
     def _assign_reps(self):
         """One representative per identical-content group (AI, faces and the tree use it). Stable once set."""
@@ -344,8 +393,11 @@ class Pipeline:
             self.info("Image AI models (%s) not installed; skipping (use 'Download models')", self.s.embedder)
             return
         self.db.set_meta("embedder", self.s.embedder)
-        rows = self.db.query("SELECT id, src_path FROM files WHERE analyzed=1 AND embedded=0 AND id=rep_id ORDER BY id")
-        total, done = len(rows), 0
+        allrows = self.db.query("SELECT f.id, f.src_path, f.media, f.duration, v.hdr FROM files f LEFT JOIN videos v "
+                                "ON v.file_id=f.id WHERE f.analyzed=1 AND f.embedded=0 AND f.id=f.rep_id ORDER BY f.id")
+        vids = [r for r in allrows if r["media"] == "video" and self.videos_on]
+        rows = [r for r in allrows if r["media"] != "video"]
+        total, done = len(allrows) if self.videos_on else len(rows), 0
         B = self.s.ai_batch
         t0 = time.time()
 
@@ -356,7 +408,7 @@ class Pipeline:
                 return r, None
 
         with ThreadPoolExecutor(max_workers=self.workers) as ex:
-            for i in range(0, total, B):
+            for i in range(0, len(rows), B):
                 self.checkpoint()
                 loaded = [x for x in ex.map(load, rows[i:i + B]) if x[1] is not None]
                 if loaded:
@@ -368,7 +420,35 @@ class Pipeline:
                 done += len(rows[i:i + B])
                 rate = done / max(time.time() - t0, 1e-6)
                 self.progress("embed", done, total, per_sec=round(rate, 1))
+        if vids:
+            self._embed_videos(ai, vids, done, total)
         self.progress("embed", total, total)
+
+    def _video_frames(self, r, max_side: int):
+        try:
+            return r, video.frames(Path(r["src_path"]), video.sample_times(r["duration"], self.s.video_frames),
+                                   max_side, bool(r["hdr"]))
+        except Exception as e:
+            log.warning("video frames failed on %s: %s", r["src_path"], e)
+            return r, []
+
+    def _embed_videos(self, ai, vids, done: int, total: int):
+        """v0.6: a video's search vector is the mean of its sampled frames' vectors (same space as photos)."""
+        with ThreadPoolExecutor(max_workers=max(1, min(2, self.workers))) as ex:
+            for i in range(0, len(vids), 4):
+                self.checkpoint()
+                self.gate.wait()                 # decoding video is real work: let the person at the PC go first
+                for r, frs in ex.map(lambda r: self._video_frames(r, 448), vids[i:i + 4]):
+                    if frs:
+                        embs = np.asarray(ai.encode_images([im for _, im in frs]), dtype=np.float32)
+                        v = embs.mean(axis=0)
+                        v /= max(float(np.linalg.norm(v)), 1e-8)
+                        self.db.execute("INSERT OR REPLACE INTO embeddings(file_id, vec) VALUES(?, ?)",
+                                        (r["id"], vec_to_blob(v)))
+                    self.db.execute("UPDATE files SET embedded=1, classified=0 WHERE id=?", (r["id"],))
+                self.db.commit()
+                done += len(vids[i:i + 4])
+                self.progress("embed", done, total, videos=True)
 
     def stage_classify(self):
         rows = self.db.query("SELECT f.*, e.vec FROM files f LEFT JOIN embeddings e ON e.file_id=f.id "
@@ -395,6 +475,8 @@ class Pipeline:
                 self.db.executemany("INSERT OR REPLACE INTO tags(file_id, tag, score) VALUES(?,?,?)",
                                     [(r["id"], tag_labels[j], sc) for j, sc in ai.pick_tags(v, tag_mat)])
             t, src, scores = cls.classify(feats, probs)
+            if r["media"] == "video":
+                t, src, scores = "video", "video", {}
             self.db.execute("UPDATE files SET type=?, type_source=?, type_scores=?, classified=1 WHERE id=?",
                             (t, src, json.dumps(scores), r["id"]))
         # exact copies inherit their representative's type
@@ -412,9 +494,12 @@ class Pipeline:
             self.info("Face models not downloaded; skipping (use 'Download models')")
             return
         self.db.set_meta("face_backend", self.s.face_pack)
-        rows = self.db.query("SELECT id, src_path FROM files WHERE analyzed=1 AND faced=0 AND id=rep_id "
-                             "AND type='photo' ORDER BY id")
-        total, done, nfaces = len(rows), 0, 0
+        allrows = self.db.query("SELECT f.id, f.src_path, f.media, f.duration, v.hdr FROM files f LEFT JOIN videos v "
+                                "ON v.file_id=f.id WHERE f.analyzed=1 AND f.faced=0 AND f.id=f.rep_id "
+                                "AND (f.type='photo' OR f.media='video') ORDER BY f.id")
+        rows = [r for r in allrows if r["media"] != "video"]
+        vids = [r for r in allrows if r["media"] == "video" and self.videos_on]
+        total, done, nfaces = len(rows) + len(vids), 0, 0
 
         def load(r):
             try:
@@ -423,7 +508,7 @@ class Pipeline:
                 return r, None
 
         with ThreadPoolExecutor(max_workers=min(4, self.workers)) as ex:
-            for i in range(0, total, 8):
+            for i in range(0, len(rows), 8):
                 self.checkpoint()
                 for r, im in ex.map(load, rows[i:i + 8]):
                     if im is not None:
@@ -450,16 +535,75 @@ class Pipeline:
                     done += 1
                 self.db.commit()
                 self.progress("faces", done, total, faces=nfaces)
+        if vids:
+            nfaces += self._faces_in_videos(eng, vids, done, total)
         self.progress("faces", total, total, faces=nfaces)
         if total:
             self.info("Faces: %d faces found in %d photos", nfaces, total)
+        if vids:
+            self.info("Faces: %d of those photos are videos (a few frames of each were searched)", len(vids))
         self._measure_old_faces()
+
+    def _faces_in_videos(self, eng, vids, done: int, total: int) -> int:
+        """v0.6: the same face models and the same people as photos. A few frames per video are searched; the
+        same person seen in several frames is kept once (their clearest face), so videos don't swamp People."""
+        from . import thumbs
+
+        found_total = 0
+        fdir = thumbs.cache_dir(self.out) / "faces"
+        fdir.mkdir(exist_ok=True)
+        with ThreadPoolExecutor(max_workers=max(1, min(2, self.workers))) as ex:
+            for i in range(0, len(vids), 2):
+                self.checkpoint()
+                self.gate.wait()
+                for r, frs in ex.map(lambda r: self._video_frames(r, DETECT_MAX_SIDE), vids[i:i + 2]):
+                    cands = []
+                    for t, im in frs:
+                        try:
+                            got = eng.faces(im, self.s.face_min_score, self.s.face_min_size)
+                        except Exception as e:
+                            log.warning("face detection failed on %s: %s", r["src_path"], e)
+                            continue
+                        W, H = im.size
+                        arr = np.asarray(im)
+                        for f in got:
+                            if "embedding" not in f:
+                                continue
+                            x1, y1, x2, y2 = f["bbox"]
+                            px = float(min(x2 - x1, y2 - y1))
+                            bl = blur_score(arr, (x1, y1, x2, y2))
+                            cands.append({"t": t, "im": im, "box": (x1, y1, x2, y2), "W": W, "H": H, "px": px,
+                                          "blur": bl, "score": f["score"], "emb": np.asarray(f["embedding"], np.float32),
+                                          "q": f["score"] * px * min(bl if bl is not None and bl >= 0 else 50, 300)})
+                    kept = pick_video_faces(cands)
+                    self.db.execute("DELETE FROM faces WHERE file_id=?", (r["id"],))
+                    for c in kept:
+                        x1, y1, x2, y2 = c["box"]
+                        W, H = c["W"], c["H"]
+                        fid = self.db.execute(
+                            "INSERT INTO faces(file_id, x1, y1, x2, y2, score, embedding, face_px, blur, frame_t) "
+                            "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                            (r["id"], max(0, x1 / W), max(0, y1 / H), min(1, x2 / W), min(1, y2 / H), c["score"],
+                             vec_to_blob(c["emb"]), c["px"], c["blur"], c["t"])).lastrowid
+                        try:                          # face picture for the People page (no second decode later)
+                            pad = 0.25 * max(x2 - x1, y2 - y1)
+                            crop = c["im"].crop((max(0, x1 - pad), max(0, y1 - pad), min(W, x2 + pad), min(H, y2 + pad)))
+                            crop.thumbnail((160, 160))
+                            crop.save(fdir / f"{fid}.jpg", "JPEG", quality=85)
+                        except Exception:
+                            pass
+                    found_total += len(kept)
+                    self.db.execute("UPDATE files SET faced=1 WHERE id=?", (r["id"],))
+                self.db.commit()
+                done += len(vids[i:i + 2])
+                self.progress("faces", done, total, faces=found_total, videos=True)
+        return found_total
 
     def _measure_old_faces(self):
         """Faces found before 0.3 have no size/sharpness yet: measure them once (re-reads those photos)."""
         backfill_face_px(self.db)
         rows = self.db.query("SELECT DISTINCT f.id, f.src_path FROM faces fa JOIN files f ON f.id=fa.file_id "
-                             "WHERE fa.blur IS NULL ORDER BY f.id")
+                             "WHERE fa.blur IS NULL AND f.media IS NULL ORDER BY f.id")
         if not rows:
             return
         self.info("Faces: measuring sharpness of faces found by an older version (%d photos, once)...", len(rows))
@@ -512,7 +656,8 @@ class Pipeline:
         rows = [dict(r) for r in self.db.query(
             "SELECT f.id, f.src_path, f.sha256, f.rep_id, f.width, f.height, f.size, f.date_source, f.camera_make, "
             "f.camera_model, f.lat, f.phash, f.dhash, f.type, f.dup_group, f.is_keeper, f.dest_path, f.organized, "
-            "f.filename, f.ext, f.taken_at, f.software, fr.state AS review FROM files f LEFT JOIN file_review fr ON fr.file_id=f.id WHERE f.analyzed=1")]
+            "f.filename, f.ext, f.taken_at, f.software, f.media, f.duration, fr.state AS review "
+            "FROM files f LEFT JOIN file_review fr ON fr.file_id=f.id WHERE f.analyzed=1")]
         byid = {r["id"]: r for r in rows}
         uf = UnionFind()
         for r in rows:
@@ -537,6 +682,7 @@ class Pipeline:
                 ok = dist <= (2 if screenshotish else 4)
             if ok:
                 uf.union(a, b); confirmed += 1
+        confirmed += self._video_pairs(rows, uf)
         old_keeper = {r["id"]: r["keeper_id"] for r in self.db.query("SELECT id, keeper_id FROM dup_groups")}
         groups = assign_stable_group_ids(uf.groups(), {r["id"]: r["dup_group"] for r in rows},
                                          int(self.db.get_meta("max_dup_group", 0) or 0), max(old_keeper, default=0))
@@ -564,6 +710,32 @@ class Pipeline:
         self.info("Duplicates: %d groups (%d look-alike pairs confirmed)", len(groups), confirmed)
         if suggested:
             self.info("Duplicates: %d earlier groups got a better copy; review them on the Clean up page", suggested)
+
+    def _video_pairs(self, rows: list[dict], uf: UnionFind) -> int:
+        """v0.6: near-duplicate videos (re-encoded, resized or re-sent copies): about the same length and the same
+        pictures at the same moments; when both have AI vectors those must agree too."""
+        vids = [r for r in rows if r.get("media") == "video" and r["rep_id"] == r["id"] and r.get("duration")]
+        if len(vids) < 2:
+            return 0
+        sigs = {r["file_id"]: json.loads(r["sig"] or "[]") for r in self.db.query("SELECT file_id, sig FROM videos")}
+        embs = {e["file_id"]: blob_to_vec(e["vec"]) for e in self.db.query(
+            f"SELECT file_id, vec FROM embeddings WHERE file_id IN ({','.join(str(r['id']) for r in vids)})")}
+        vids.sort(key=lambda r: r["duration"])
+        n = 0
+        for i, a in enumerate(vids):
+            for b in vids[i + 1:]:
+                if b["duration"] - a["duration"] > max(1.0, 0.02 * b["duration"]):
+                    break
+                if not video.same_video({"duration": a["duration"], "sig": sigs.get(a["id"])},
+                                        {"duration": b["duration"], "sig": sigs.get(b["id"])}):
+                    continue
+                if a["id"] in embs and b["id"] in embs:
+                    ea, eb = embs[a["id"]], embs[b["id"]]
+                    if float(ea @ eb) / (np.linalg.norm(ea) * np.linalg.norm(eb) + 1e-8) < 0.85:
+                        continue
+                uf.union(a["id"], b["id"])
+                n += 1
+        return n
 
     def stage_organize(self):
         rows = self.db.query(
@@ -620,8 +792,11 @@ class Pipeline:
         """Pre-generate grid thumbnails into _index/thumbs (only that cache is written; photos are only read)."""
         from . import thumbs
 
-        rows = self.db.query("SELECT id, src_path, dest_path, mtime, size FROM files WHERE analyzed=1 AND "
-                             "(is_keeper IS NULL OR is_keeper=1) AND (rep_id IS NULL OR rep_id=id) ORDER BY id")
+        rows = self.db.query("SELECT f.id, f.src_path, f.dest_path, f.mtime, f.size, f.media, f.duration, v.hdr "
+                             "FROM files f LEFT JOIN videos v ON v.file_id=f.id WHERE f.analyzed=1 AND "
+                             "(f.is_keeper IS NULL OR f.is_keeper=1) AND (f.rep_id IS NULL OR f.rep_id=f.id) ORDER BY f.id")
+        if not self.videos_on:
+            rows = [r for r in rows if r["media"] != "video"]
         todo = [r for r in rows if not thumbs.cache_path(self.out, r["id"]).exists()]
         total, done, failed = len(todo), 0, 0
         if not total:
@@ -645,6 +820,43 @@ class Pipeline:
                 self.progress("thumbs", done, total)
         self.info("Thumbnails: %d made in %.1fs (%d could not be read)", total - failed, time.time() - t0, failed)
 
+    def stage_videos(self):
+        """v0.6: scrub/hover sprites for every video, and a small H.264 copy for the ones a browser can't play
+        (e.g. iPhone HEVC). Only _index/video is written. Waits while you use the PC in background mode."""
+        if not self.videos_on:
+            return
+        rows = self.db.query(
+            "SELECT f.id, f.src_path, f.playable, v.sprite_n, v.proxy FROM files f LEFT JOIN videos v ON v.file_id=f.id "
+            "WHERE f.media='video' AND f.analyzed=1 AND (f.is_keeper IS NULL OR f.is_keeper=1) "
+            "AND (f.rep_id IS NULL OR f.rep_id=f.id) AND NOT EXISTS (SELECT 1 FROM file_review fr "
+            "WHERE fr.file_id=f.id AND fr.state='remove') ORDER BY f.taken_at DESC, f.id DESC")
+        sprites = [r for r in rows if not r["sprite_n"] or not video.sprite_path(self.out, r["id"]).exists()]
+        proxies = [r for r in rows if self.s.video_proxies and not r["playable"] and r["proxy"] != "failed"
+                   and video.proxy_state(self.db, self.out, r["id"]) == "missing"]
+        total = len(sprites) + len(proxies)
+        if not total:
+            return
+        if proxies and not video.h264_encoder():
+            self.info("Videos: no H.264 encoder in this ffmpeg; videos your browser can't play stay as they are")
+            total -= len(proxies)
+            proxies = []
+        done = made = failed = 0
+        t0 = time.time()
+        for r in sprites:
+            self.checkpoint()
+            self.gate.wait()
+            made += video.ensure_sprite(self.db, self.out, r["id"]) is not None
+            done += 1
+            self.progress("videos", done, total)
+        for r in proxies:              # slowest part last: everything else is usable meanwhile
+            self.checkpoint()
+            self.gate.wait()
+            failed += video.ensure_proxy(self.db, self.out, r["id"]) == "failed"
+            done += 1
+            self.progress("videos", done, total, playable_copies=done - len(sprites))
+        self.info("Video previews: %d scrub strips, %d playable copies (%d failed) in %.0fs (%s)", made,
+                  len(proxies) - failed, failed, time.time() - t0, video.h264_encoder() or "no encoder")
+
     def dest_for(self, r, keeper_sha: dict) -> Path | None:
         name = r["filename"]
         if r["analyzed"] == -1:
@@ -662,6 +874,23 @@ class Pipeline:
 
     def _write_reports(self, exact_rows=None):
         write_reports(self.db, self.out)
+
+
+SAME_PERSON_IN_VIDEO = 0.45      # cosine similarity: two faces in one video this alike are the same person
+
+
+def pick_video_faces(cands: list[dict], max_faces: int = 12) -> list[dict]:
+    """One face per person per video: clearest first, drop later ones that match a kept face."""
+    kept: list[dict] = []
+    for c in sorted(cands, key=lambda c: -c["q"]):
+        e = c["emb"] / max(float(np.linalg.norm(c["emb"])), 1e-8)
+        if any(float(e @ k["_e"]) >= SAME_PERSON_IN_VIDEO for k in kept):
+            continue
+        c["_e"] = e
+        kept.append(c)
+        if len(kept) >= max_faces:
+            break
+    return kept
 
 
 def main_dest(r) -> Path:

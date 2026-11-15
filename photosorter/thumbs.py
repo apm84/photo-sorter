@@ -56,7 +56,8 @@ def ensure(out: Path, row, kind: str = "thumb") -> Path:
     except OSError:
         if p.exists():
             return p
-    im = open_image(src, max_side=THUMB_SIDE if kind == "thumb" else PREVIEW_SIDE)   # EXIF-rotated, RGB
+    side = THUMB_SIDE if kind == "thumb" else PREVIEW_SIDE
+    im = media_image(src, side, row)                       # EXIF-rotated photo, or a video's poster frame
     tmp = p.with_name(p.name + ".tmp")
     if WEBP:
         im.save(tmp, "WEBP", quality=QUALITY[kind], method=4)
@@ -67,6 +68,25 @@ def ensure(out: Path, row, kind: str = "thumb") -> Path:
     if legacy != p:
         legacy.unlink(missing_ok=True)          # 0.2 cache file (320 px JPEG)
     return p
+
+
+def _get(row, key, default=None):
+    try:
+        v = row[key]
+        return default if v is None else v
+    except (KeyError, IndexError, TypeError):
+        return default
+
+
+def media_image(src: Path, max_side: int | None, row=None, t: float | None = None):
+    """RGB picture of a photo, or of a video frame (v0.6: posters at 10% in, at most 3 s; faces at their time)."""
+    from . import video
+
+    if video.is_video_path(src) or _get(row, "media") == "video":
+        if t is None:
+            t = video.poster_time(_get(row, "duration"))
+        return video.frame(src, t, max_side, bool(_get(row, "hdr", False)))
+    return open_image(src, max_side=max_side)
 
 
 def etag(p: Path, kind: str) -> str:

@@ -230,3 +230,17 @@ count. *Clean up > Clean up tasks > What Clean up has learned* shows it and has 
 - Builds come from `.github/workflows/release.yml` on a `v*` tag: tests on Windows, PyInstaller (one folder,
   onnxruntime-directml, decode-only pi-heif for HEIC), and an Inno Setup installer. The models are never in the installer.
 - License: MIT (see `LICENSE`); models and libraries keep their own licenses (see `THIRD_PARTY_NOTICES.md`).
+
+## Videos and Delete (v0.6)
+
+- **Delete...** appears whenever photos or videos are selected (Search, Videos, albums, People). It moves only the
+  selected sorted copies to the Recycle Bin (or `_index\_trash`), after a confirmation, and **Undo delete** brings
+  them back. Originals are never touched.
+- Videos (`.mp4 .mov .m4v .3gp .avi .mkv .webm .mts .m2ts .wmv .mpg`) are copied into the sorted folders with the
+  same date/place rules. The **Videos** tab has a grid with hover previews and a player with scrub thumbnails,
+  people, Up next and autoplay. Faces, content search, duplicates, albums and family sync work for videos too.
+- Videos browsers can't play get a cached H.264 copy in `_index\video` (low priority); originals stay untouched.
+- The Windows installer bundles FFmpeg (LGPL). From source, install FFmpeg yourself (`ffmpeg`/`ffprobe` on PATH or
+  `PHOTOSORTER_FFMPEG_DIR`); without it, videos are skipped.
+- Family sync sends full videos last, after all photos (needs Family Photos 1.1+). Turn it off with **Include videos**
+  on the Family sync page.

@@ -42,3 +42,28 @@ downloads. Apache License 2.0: https://www.apache.org/licenses/LICENSE-2.0
 
 The installer does not include the GPL-licensed x265 encoder (it uses decode-only pi-heif instead of pillow-heif).
 Running from source (`Setup-PhotoSorter.bat`) installs pillow-heif from PyPI on your own PC.
+
+## FFmpeg (videos, 0.6.0 and later)
+
+The Windows installer includes `ffmpeg.exe`, `ffprobe.exe` and the FFmpeg libraries (`avcodec`, `avformat`,
+`avfilter`, `avdevice`, `avutil`, `swresample`, `swscale`) as separate, replaceable DLLs in `_internal\ffmpeg`.
+Photo Sorter runs them as separate programs to read video details, take frames, make preview strips and make
+H.264 copies of videos browsers can't play. Your original videos are only read.
+
+- FFmpeg (https://ffmpeg.org), (c) the FFmpeg developers, licensed under the GNU Lesser General Public License
+  version 3 or later (LGPL-3.0-or-later). This build is configured with `--enable-version3` and without
+  `--enable-gpl` or `--enable-nonfree`, so it contains no GPL-only or non-free parts; the CI build checks this.
+  The full licence text is installed as `FFMPEG-LICENSE.txt` and in `_internal\ffmpeg\LICENSE.txt`.
+- Binaries: the "win64-lgpl-shared" build of FFmpeg 8.1 from BtbN FFmpeg-Builds
+  (https://github.com/FFmpeg-Builds/FFmpeg-Builds). Source code: https://github.com/FFmpeg/FFmpeg (release/8.1);
+  the build scripts and the exact versions of every library linked into the build are in the FFmpeg-Builds
+  repository. You may replace the DLLs/exes with your own build of the same FFmpeg version.
+- Libraries built into those DLLs include, among others: Cisco OpenH264 (BSD-2-Clause; H.264 encoding when
+  Windows' own encoder is unavailable), dav1d (BSD-2-Clause), libvpx (BSD-3-Clause), libopus (BSD-3-Clause),
+  libvorbis/libogg (BSD-3-Clause), zimg (WTFPL) and others listed in the FFmpeg-Builds repository, each under
+  its own permissive or LGPL licence.
+- H.264 encoding prefers the encoder built into Windows (Media Foundation) or the graphics card (AMD AMF,
+  NVIDIA NVENC, Intel Quick Sync) and only falls back to OpenH264.
+
+Running from source: install FFmpeg yourself (put `ffmpeg` and `ffprobe` on PATH, or set
+`PHOTOSORTER_FFMPEG_DIR`). Without it, Photo Sorter sorts photos and skips videos.

@@ -9,6 +9,8 @@ from pathlib import Path
 import imagehash
 from PIL import Image, ImageOps
 
+from .config import VIDEO_EXTS
+
 try:  # HEIC/HEIF support
     import pillow_heif
 
@@ -263,6 +265,8 @@ def unreadable_reason(path: Path, error: str | None) -> str:
         return "empty file (0 bytes)"
     if kind == "zeros":
         return "file is all zeros (damaged or incomplete copy)"
+    if kind == "video" and Path(path).suffix.lower() in VIDEO_EXTS:
+        return "a video that could not be read (damaged, or ffmpeg is missing or can't decode it)"
     if kind == "video":
         return "a video file with a photo extension (videos are not sorted)"
     if kind == "heif":

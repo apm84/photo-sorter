@@ -65,8 +65,9 @@ DEFAULTS = {
     "interval_minutes": 60,        # look for changes this often while the worker runs
     "auto_after_run": True,        # start a sync after each sort run
     "verify_tls": True,
+    "include_videos": True,        # v0.6: full videos too, sent last (after every photo), same speed cap and window
 }
-NAME_RE = re.compile(r"^[0-9a-f]{64}\.(t|p|o|f|catalog)\.[a-z0-9]{1,8}(\.gz)?$")
+NAME_RE = re.compile(r"^[0-9a-f]{64}\.(t|p|o|f|v|x|catalog)\.[a-z0-9]{1,8}(\.gz)?$")   # v: video, x: its H.264 copy
 TOKEN_RE = re.compile(r"^[A-Za-z0-9_\-]{20,200}$")
 HHMM_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 EST_BYTES = {"t": 40_000, "p": 450_000, "f": 15_000}
@@ -144,6 +145,8 @@ def update_config(out, body: dict) -> dict:
     for k in ("enabled", "window_enabled", "include_full", "include_screenshots", "auto_after_run", "verify_tls"):
         if k in body:
             cfg[k] = bool(body[k])
+    if "include_videos" in body:     # v0.6
+        cfg["include_videos"] = bool(body["include_videos"])
     if "max_mbps" in body:
         v = float(body["max_mbps"])
         if not 0.1 <= v <= 100:
@@ -600,6 +603,15 @@ def _face_crop(out: Path, db, face_id: int) -> Path | None:
     return fp
 
 
+def _sha_file(out, p: Path) -> str:
+    """Content hash of a cached file (the H.264 copies), remembered by path, size and time."""
+    hc = HashCache(out)
+    try:
+        return hc.sha(p)[0]
+    finally:
+        hc.close()
+
+
 def build_plan(out, cfg: dict, db=None) -> dict:
     """Catalog records + the list of files to send (paths are resolved lazily)."""
     from .db import DB
@@ -610,14 +622,21 @@ def build_plan(out, cfg: dict, db=None) -> dict:
     db = db or DB(db_path(out))
     try:
         types = ("photo", "screenshot") if cfg.get("include_screenshots") else ("photo",)
+        videos = bool(cfg.get("include_videos"))
+        if videos:
+            types += ("video",)
         album_files = {r[0] for r in db.query("SELECT DISTINCT file_id FROM album_items")}
         rows = db.query(
             "SELECT f.id, f.filename, f.ext, f.taken_at, f.width, f.height, f.place, f.size, f.mtime, f.sha256, "
-            "f.src_path, f.dest_path, f.type FROM files f LEFT JOIN file_review fr ON fr.file_id=f.id "
+            "f.src_path, f.dest_path, f.type, f.media, f.duration, f.playable, f.live, v.proxy "
+            "FROM files f LEFT JOIN file_review fr ON fr.file_id=f.id LEFT JOIN videos v ON v.file_id=f.id "
             "WHERE (f.is_keeper IS NULL OR f.is_keeper=1) AND (f.rep_id IS NULL OR f.rep_id=f.id) "
             "AND f.dest_path IS NOT NULL AND f.sha256 IS NOT NULL AND COALESCE(fr.state, '') <> 'remove' "
             "ORDER BY f.taken_at DESC, f.id DESC")
-        rows = [r for r in rows if r["type"] in types or r["id"] in album_files]
+        rows = [r for r in rows if (r["type"] in types and not (r["live"] and r["media"] == "video"))
+                or r["id"] in album_files]
+        if not videos:      # a Pi without video support (Family Photos before 1.1) or videos switched off
+            rows = [r for r in rows if r["media"] != "video"]
         ids = {r["id"] for r in rows}
         people = [dict(p) for p in db.query(
             "SELECT id, name FROM people WHERE name IS NOT NULL AND name<>'' AND hidden=0 ORDER BY lower(name)")]
@@ -643,6 +662,16 @@ def build_plan(out, cfg: dict, db=None) -> dict:
             rec = {"t": "photo", "id": r["id"], "k": k, "d": r["taken_at"], "w": r["width"], "h": r["height"],
                    "pl": r["place"], "fn": r["filename"], "ty": r["type"], "th": th, "pv": pv, "o": o,
                    "os": r["size"], "pp": sorted(person_of.get(r["id"], ())), "al": album_of.get(r["id"], [])}
+            if r["media"] == "video":
+                # v0.6: poster (t/p) and the full video (v), plus the H.264 copy (x) when browsers can't play it
+                from . import video as _video
+                rec.update(o=None, os=None, mv="video", du=r["duration"], pb=bool(r["playable"]),
+                           v=f"{k}.v.{oext}", vs=r["size"], x=None)
+                o = None                     # the full video goes as "v" (last), not with the full-size photos
+                xp = _video.proxy_path(out, r["id"])
+                if not r["playable"] and r["proxy"] == "ok" and xp.is_file():
+                    rec["x"] = f"{_sha_file(out, xp)}.x.mp4"
+                    rec["xs"] = xp.stat().st_size
             recs.append(rec)
             for pid in rec["pp"]:
                 per_person[pid] = per_person.get(pid, 0) + 1
@@ -654,6 +683,11 @@ def build_plan(out, cfg: dict, db=None) -> dict:
             items.append({"name": pv, "kind": "p", "row": row})
             if o:
                 items.append({"name": o, "kind": "o", "row": row, "sha": k, "size": r["size"]})
+            if rec.get("v"):
+                if rec.get("x"):
+                    items.append({"name": rec["x"], "kind": "x", "path": _video.proxy_path(out, r["id"]),
+                                  "size": rec["xs"]})
+                items.append({"name": rec["v"], "kind": "v", "row": row, "sha": k, "size": r["size"]})
         prec = []
         for p in people:
             if not per_person.get(p["id"]):
@@ -674,7 +708,8 @@ def catalog_bytes(plan: dict) -> bytes:
     lines = [json.dumps({"t": "meta", "v": PROTOCOL, "app": f"Photo Sorter {__version__}",
                          "at": datetime.now().astimezone().isoformat(timespec="seconds"),
                          "photos": len(plan["photos"]), "people": len(plan["people"]),
-                         "albums": len(plan["albums"])})]
+                         "albums": len(plan["albums"]),
+                         "videos": sum(1 for r in plan["photos"] if r.get("mv") == "video")})]
     for rec in plan["people"] + plan["albums"] + plan["photos"]:
         lines.append(json.dumps(rec, separators=(",", ":")))
     raw = ("\n".join(lines) + "\n").encode("utf-8")
@@ -735,11 +770,11 @@ class Syncer:
     def _path_for(self, it: dict) -> Path | None:
         from . import thumbs
 
-        if it["kind"] == "o":
+        if it["kind"] in ("o", "v"):
             p = self.out / it["row"]["dest_path"]
             return p if p.is_file() else None
-        if it["kind"] == "f":
-            return it["path"]
+        if it["kind"] in ("f", "x"):
+            return it["path"] if Path(it["path"]).is_file() else None
         self.gate.wait()                      # making a preview is real CPU work: let the user go first
         try:
             return thumbs.ensure(self.out, it["row"], "thumb" if it["kind"] == "t" else "preview")
@@ -747,7 +782,7 @@ class Syncer:
             return None
 
     def _sha_for(self, it: dict, p: Path) -> tuple[str, int]:
-        if it["kind"] == "o":
+        if it["kind"] in ("o", "v"):
             st = p.stat()
             src = Path(it["row"]["src_path"])
             try:
@@ -802,7 +837,9 @@ class Syncer:
             if not pi.get("writable"):
                 raise SyncError(pi.get("problem") or "The Pi can't write to its photo folder.")
             self.save_state(force=True, phase="preparing")
-            plan = build_plan(self.out, self.cfg)
+            # v0.6: videos only go to a Family Photos that can store and play them (1.1+)
+            plan = build_plan(self.out, {**self.cfg, "include_videos": bool(self.cfg.get("include_videos")
+                                                                            and pi.get("videos"))})
             # one face picture per named person
             from .db import DB
             db = DB(db_path(self.out))
@@ -828,7 +865,7 @@ class Syncer:
                 self.upload(cname, cpath, csha, len(cat), self._missing([cname]).get(cname) or 0)
             cres = self.client.json("POST", "/api/photosync/catalog", {"name": cname})
             # what's missing on the Pi
-            order = {"f": 0, "t": 1, "p": 2, "o": 3}
+            order = {"f": 0, "t": 1, "p": 2, "o": 3, "x": 4, "v": 5}   # videos last: the lowest priority
             items = sorted(plan["items"], key=lambda it: order[it["kind"]])
             names = [it["name"] for it in items]
             missing: dict[str, int] = {}

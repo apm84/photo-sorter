@@ -217,13 +217,14 @@ def free_bytes(path) -> int:
 
 def folder_bytes(folders, limit_s: float = 4.0) -> tuple[int, bool]:
     """Rough size of the photo folders (stops after `limit_s`; the bool says whether it finished)."""
-    from .config import IMAGE_EXTS
+    from .config import IMAGE_EXTS, VIDEO_EXTS
 
+    exts = IMAGE_EXTS | VIDEO_EXTS   # v0.6: videos are copied too
     tot, t0 = 0, time.monotonic()
     for f in folders:
         for root, _dirs, files in os.walk(f):
             for n in files:
-                if os.path.splitext(n)[1].lower() in IMAGE_EXTS:
+                if os.path.splitext(n)[1].lower() in exts:
                     try:
                         tot += os.path.getsize(os.path.join(root, n))
                     except OSError:
@@ -356,6 +357,13 @@ def self_test(use_gpu: bool = True, use_ai: bool = True, use_faces: bool = True)
         res["heic"] = heic_support()
     except Exception:
         res["heic"] = None
+    try:                                     # v0.6: the bundled video tools
+        from . import video
+
+        res["ffmpeg"] = video.version() if video.available() else None
+        res["h264_encoder"] = video.h264_encoder() if video.available() else None
+    except Exception:
+        res["ffmpeg"] = None
     return res
 
 

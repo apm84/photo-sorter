@@ -40,6 +40,23 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-windows.txt -r requirements-dev.txt
 
+      - name: Get FFmpeg (LGPL shared build, for videos)
+        run: |
+          # BtbN FFmpeg-Builds, release 8.1, LGPL-3.0 (built with --enable-version3, without --enable-gpl)
+          $url = "https://github.com/FFmpeg-Builds/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-lgpl-shared-8.1.zip"
+          Invoke-WebRequest $url -OutFile ffmpeg.zip
+          Expand-Archive ffmpeg.zip -DestinationPath ffmpeg-dl
+          $root = (Get-ChildItem ffmpeg-dl -Directory | Select-Object -First 1).FullName
+          New-Item -ItemType Directory -Force packaging\ffmpeg\bin | Out-Null
+          Get-ChildItem "$root\bin" | Where-Object { $_.Name -notlike "ffplay*" } | Copy-Item -Destination packaging\ffmpeg\bin
+          Copy-Item "$root\LICENSE.txt" packaging\ffmpeg\LICENSE.txt
+          "FFmpeg source: https://github.com/FFmpeg/FFmpeg  Build scripts: https://github.com/FFmpeg-Builds/FFmpeg-Builds`nDownloaded from: $url" | Out-File -Encoding utf8 packaging\ffmpeg\SOURCE.txt
+          $cfg = & packaging\ffmpeg\bin\ffmpeg.exe -hide_banner -buildconf | Out-String
+          if ($cfg -match "--enable-gpl" -or $cfg -match "--enable-nonfree") { throw "FFmpeg build is not LGPL" }
+          & packaging\ffmpeg\bin\ffmpeg.exe -hide_banner -version | Select-Object -First 1
+          "{0:N0} MB" -f ((Get-ChildItem packaging\ffmpeg\bin | Measure-Object Length -Sum).Sum / 1MB)
+          "PHOTOSORTER_FFMPEG_DIR=$pwd\packaging\ffmpeg\bin" >> $env:GITHUB_ENV
+
       - name: Tests (Windows, CPU)
         run: python -m pytest -q -p no:cacheprovider
 
@@ -55,9 +72,11 @@ jobs:
           $p = Start-Process $exe -ArgumentList "gpu-probe","--json","$pwd\probe.json" -Wait -PassThru
           Get-Content probe.json
           if (-not (Select-String -Path probe.json -Pattern "DmlExecutionProvider" -Quiet)) { throw "DirectML provider missing from the build" }
+          $env:PHOTOSORTER_FFMPEG_DIR = ""    # the build must find its own copy
           $p = Start-Process $exe -ArgumentList "selftest","--cpu","--no-ai","--no-faces","--json","$pwd\selftest.json" -Wait -PassThru
           Get-Content selftest.json
           if (-not (Select-String -Path selftest.json -Pattern '"heic": "' -Quiet)) { throw "HEIC support missing from the build" }
+          if (-not (Select-String -Path selftest.json -Pattern '"ffmpeg": "' -Quiet)) { throw "FFmpeg missing from the build" }
           "{0:N0} MB" -f ((Get-ChildItem dist\PhotoSorter -Recurse | Measure-Object Length -Sum).Sum / 1MB)
 
       - name: Build installer (Inno Setup)

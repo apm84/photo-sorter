@@ -64,7 +64,7 @@ def quality_key(f: dict):
     """Higher is better: resolution, has EXIF date, has camera, file size, then shorter path."""
     return (
         (f.get("width") or 0) * (f.get("height") or 0),
-        1 if f.get("date_source") == "exif" else 0,
+        1 if f.get("date_source") in ("exif", "metadata") else 0,
         1 if (f.get("camera_make") or f.get("camera_model")) else 0,
         1 if f.get("lat") is not None else 0,
         f.get("size") or 0,

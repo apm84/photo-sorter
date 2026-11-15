@@ -92,6 +92,7 @@ function render() {
       </div>
       <dl>
         <dt>Size</dt><dd>${m.width ?? "?"}&times;${m.height ?? "?"} &middot; ${fmtSize(m.size)}</dd>
+        ${m.media === "video" ? `<dt>Length</dt><dd>${esc(PS.fmtDur(m.duration))} (video)</dd>` : ""}
         <dt>Date</dt><dd>${esc(m.taken_at ? m.taken_at.replace("T", " ") : "none")}${m.date_source ? ` <span class="status">(${esc(m.date_source)})</span>` : ""}</dd>
         <dt>Camera</dt><dd>${esc([m.camera_make, m.camera_model].filter(Boolean).join(" ") || "none")}</dd>
         <dt>GPS</dt><dd>${gps(m)}</dd>

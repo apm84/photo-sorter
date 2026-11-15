@@ -146,6 +146,7 @@ def keeper_reasons(keeper: dict, others: list[dict]) -> list[str]:
 
 MEMBER_COLS = ("id, src_path, filename, size, width, height, taken_at, date_source, camera_make, camera_model, "
                "lat, lon, place, dest_path, organized, sha256, rep_id, type, is_keeper, analyzed, mtime, ext, software")
+MEMBER_COLS += ", media, duration"   # v0.6: videos in duplicate groups
 
 
 def group_detail(db: DB, gid: int, out: Path | None = None) -> dict:
@@ -385,6 +386,61 @@ def apply_decision(db: DB, out: Path, gid: int, keep_ids, keeper_id: int | None 
 def delete_group(db: DB, out: Path, gid: int) -> dict:
     """Remove every output copy in the group and keep none. Originals are never touched."""
     return apply_decision(db, out, gid, [], None, allow_empty=True)
+
+
+def delete_files(db: DB, out: Path, file_ids) -> dict:
+    """v0.6 "Delete" on a selection (Search, Albums, People, Videos): the selected SORTED COPIES go to the Recycle
+    Bin (else _index/_trash), exactly like Clean up removals, and the files are marked removed so they leave the
+    library, albums and family sync. Originals are never touched (the same _guard as Clean up). One undo step."""
+    _check_idle(db)
+    ids = list(dict.fromkeys(int(x) for x in file_ids))
+    if not ids:
+        raise CleanupError("nothing selected")
+    if len(ids) > 100000:
+        raise CleanupError("too many files in one go")
+    removed = nbytes = 0
+    with db.lock:
+        act = _Action(db, out, f"delete {len(ids)} selected")
+        now = datetime.now().isoformat(timespec="seconds")
+        try:
+            for fid in ids:
+                m = db.one(f"SELECT {MEMBER_COLS}, dup_group FROM files WHERE id=?", (fid,))
+                if not m:
+                    continue
+                m = dict(m)
+                act.remember_file(fid)
+                if m["dest_path"]:
+                    p = _guard(out, m["dest_path"], m["src_path"])
+                    if p.exists():
+                        _drop_people_links(out, p)
+                        albums.drop_links_to(db, out, fid)
+                        size = p.stat().st_size
+                        how = remove_copy(out, p, act.id)
+                        act.ops.append({"op": "remove", "file_id": fid, "path": m["dest_path"], "size": size, **how})
+                        _tidy_dup_folder(out, m["dest_path"])
+                        removed += 1
+                        nbytes += size
+                    act.used.discard(m["dest_path"].lower())
+                db.execute("UPDATE files SET dest_path=NULL, organized=1, is_keeper=0 WHERE id=?", (fid,))
+                db.execute("INSERT OR REPLACE INTO file_review(file_id, state, action_id, decided_at) VALUES(?,?,?,?)",
+                           (fid, "remove", act.id, now))
+                if m["dup_group"]:
+                    g = db.one("SELECT keeper_id FROM dup_groups WHERE id=?", (m["dup_group"],))
+                    if g and g["keeper_id"] == fid:     # its group needs a new keeper: Clean up asks again
+                        act.remember_group(m["dup_group"])
+                        if m["dup_group"] not in act.groups:
+                            act.groups.append(m["dup_group"])
+                        db.execute("UPDATE dup_groups SET keeper_id=NULL WHERE id=?", (m["dup_group"],))
+        except Exception:
+            act.save(); db.commit()
+            _rollback_partial(db, out, act)
+            raise
+        act.save()
+        db.commit()
+        write_reports(db, out)
+        _sync_albums(db, out)
+    return {"action_id": act.id, "files": len(ids), "removed_copies": removed, "bytes": nbytes,
+            "recycle_bin": recycle_available()}
 
 
 def approve_all(db: DB, out: Path) -> dict:

@@ -39,6 +39,10 @@ BUCKET_LABELS = {
     "near_only": "Needs attention: only a look-alike copy, not identical",
 }
 SAFE = {"safe_copy", "safe_deduped"}
+# v0.6: originals whose sorted copy was deleted on purpose with Delete on a selection
+BUCKETS = BUCKETS[:2] + ("safe_deleted",) + BUCKETS[2:]
+BUCKET_LABELS["safe_deleted"] = "Safe: you deleted it on purpose with Delete (its sorted copy went to the Recycle Bin or trash)"
+SAFE = SAFE | {"safe_deleted"}
 CHUNK = 1 << 20
 SKIP_DIRS = {"$recycle.bin", "system volume information", INDEX_DIRNAME.lower()}
 RESCUE_DIR = "Rescued"
@@ -184,9 +188,9 @@ class Verifier:
             return "missing", f"could not be read ({err})", None
         if not rows:
             ext = Path(path).suffix.lower()
-            from .config import IMAGE_EXTS
+            from .config import IMAGE_EXTS, VIDEO_EXTS
 
-            if ext not in IMAGE_EXTS:
+            if ext not in IMAGE_EXTS | VIDEO_EXTS:
                 return "missing", f"not a photo type Photo Sorter copies ({ext or 'no extension'})", None
             return "missing", "not in the index yet (run Start to sort it)", None
         r = rows[0]
@@ -195,6 +199,9 @@ class Verifier:
                 kept = self._kept_copy(row["dup_group"], lib)
                 if kept:
                     return "safe_deduped", f"removed on purpose in Clean up (group {row['dup_group']}); kept copy exists", kept
+        if any(row["review"] == "remove" and not row["dup_group"] for row in rows):
+            # v0.6: deleted on purpose with Delete on a selection (only the sorted copy went; this original is untouched)
+            return "safe_deleted", "deleted on purpose with Delete (the sorted copy is in the Recycle Bin or trash)", None
         if any(row["review"] == "remove" for row in rows):
             return "missing", "removed in Clean up and no kept copy of its group remains (Delete all?)", None
         if r["dup_group"]:

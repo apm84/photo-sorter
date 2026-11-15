@@ -67,6 +67,9 @@ class App:
                                width=32, state="readonly")
         mode_cb.grid(row=1, column=4, sticky="w")
         mode_cb.bind("<<ComboboxSelected>>", lambda e: self.change_mode())
+        # v0.6: videos (copied, previews, faces and search; needs the bundled ffmpeg)
+        self.v_videos = tk.BooleanVar(value=self.s.use_videos)
+        ttk.Checkbutton(opts, text="Include videos", variable=self.v_videos).grid(row=0, column=4, sticky="w")
         self.model_lbl = ttk.Label(opts, text=""); self.model_lbl.grid(row=2, column=0, columnspan=5, sticky="w")
 
         btns = ttk.Frame(root); btns.pack(fill="x", **pad)
@@ -132,6 +135,7 @@ class App:
         s.use_ai, s.use_faces, s.use_gpu = self.v_ai.get(), self.v_faces.get(), self.v_gpu.get()
         s.copy_exact_duplicates, s.mtime_date_fallback = self.v_exact.get(), self.v_mtime.get()
         s.face_pack = self.v_pack.get()
+        s.use_videos = self.v_videos.get()
         s.run_mode = self.mode_value()
         GUI_STATE.write_text(json.dumps(s.to_dict(), indent=2), encoding="utf-8")
         return s
@@ -316,6 +320,7 @@ class App:
                     self.src_list.insert("end", x)
                 self.out_var.set(self.s.output)
                 self.v_ai.set(self.s.use_ai); self.v_faces.set(self.s.use_faces); self.v_gpu.set(self.s.use_gpu)
+                self.v_videos.set(self.s.use_videos)
             self.refresh_model_status()
         SetupWizard(self.root, done, rerun=True)
 

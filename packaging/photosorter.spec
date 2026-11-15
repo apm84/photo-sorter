@@ -27,6 +27,19 @@ try:
 except ImportError:
     pass
 
+# Videos (0.6): FFmpeg + FFprobe, LGPL-3.0 "shared" build (BtbN FFmpeg-Builds, no GPL parts), as separate
+# DLLs and exes in _internal/ffmpeg (CI downloads them into packaging/ffmpeg/bin; see release.yml). Optional
+# for local builds: without them the app sorts photos and skips videos.
+FF = os.path.join(SPECPATH, "ffmpeg")
+if os.path.isdir(os.path.join(FF, "bin")):
+    for f in os.listdir(os.path.join(FF, "bin")):
+        if f.lower().endswith((".exe", ".dll")) and not f.lower().startswith("ffplay"):
+            datas.append((os.path.join(FF, "bin", f), "ffmpeg"))   # as data: no dependency scan, no copies elsewhere
+    for f in ("LICENSE.txt", "SOURCE.txt"):
+        if os.path.exists(os.path.join(FF, f)):
+            datas.append((os.path.join(FF, f), "ffmpeg"))
+hidden += ["photosorter.video"]
+
 a = Analysis([os.path.join(SPECPATH, "launcher.py")], pathex=[ROOT], binaries=binaries, datas=datas,
              hiddenimports=hidden, module_collection_mode={"reverse_geocoder": "py"},   # LGPL: shipped as replaceable .py files
              excludes=["pillow_heif", "torch", "transformers", "matplotlib", "pytest", "IPython"])

@@ -28,3 +28,8 @@ dist-installer/
 *.sqlite3
 .env
 sync-secrets.json
+# v0.6: FFmpeg downloaded by CI for the installer, and test videos
+packaging/ffmpeg/
+*.mp4
+*.mov
+*.avi
