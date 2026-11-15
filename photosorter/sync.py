@@ -4,7 +4,8 @@ The PC stays the master. Nothing on the PC is ever modified: originals and sorte
 the only files written are this module's own state under <output>/_index (sync.json, sync-state.json,
 sync-control.json, sync-cache.sqlite, sync-cache/ face crops) plus the normal thumbnail cache.
 
-What goes to the Pi (receiver: family-calendar /api/photosync/*, LAN only, pairing token):
+What goes to the Pi (receiver: the Family Photos app's /api/photosync/*, port 8443, LAN only, pairing token;
+before 0.5.1 / family calendar 0.1.18 the receiver was inside family-calendar):
   * a catalog (gzip NDJSON): photos with date, size, place, people and albums; named people; albums
   * thumbnails (400 px) and previews (1600 px) from the existing _index/thumbs cache
   * optionally the full-size sorted copies (Settings: "Also send full-size photos")
@@ -53,7 +54,7 @@ log = logging.getLogger("photosorter.sync")
 PROTOCOL = 1
 CHUNK = 1 << 20
 DEFAULTS = {
-    "pi_url": "",                  # e.g. https://calendar.example.org (the calendar's own address)
+    "pi_url": "",                  # the Family Photos app, e.g. https://calendar.example.org:8443 (0.5.1+)
     "enabled": True,               # sync on a schedule / after runs once set up
     "max_mbps": 2.0,               # megabytes per second (Pi on slow Wi-Fi)
     "window_enabled": False,       # only sync inside a time window
@@ -136,7 +137,8 @@ def update_config(out, body: dict) -> dict:
         if url:
             u = urlsplit(url)
             if u.scheme not in ("http", "https") or not u.hostname or u.username or u.password:
-                raise ValueError("Enter the calendar's address, like https://calendar.example.org or http://192.168.1.50:8080")
+                raise ValueError("Enter the Family Photos address, like https://calendar.example.org:8443 or "
+                                 "https://192.168.1.50:8443")
             url = f"{u.scheme}://{u.netloc}"
         cfg["pi_url"] = url
     for k in ("enabled", "window_enabled", "include_full", "include_screenshots", "auto_after_run", "verify_tls"):
@@ -162,7 +164,7 @@ def update_config(out, body: dict) -> dict:
     elif body.get("token"):
         tok = str(body["token"]).strip()
         if not TOKEN_RE.match(tok):
-            raise ValueError("That pairing code doesn't look right. Copy it again from the calendar admin.")
+            raise ValueError("That pairing code doesn't look right. Copy it again from the Family Photos admin.")
         set_token(out, tok)
     _write_json(_p(out, "sync.json"), cfg)
     return status(out)
@@ -499,9 +501,13 @@ class PiClient:
             js = json.loads(data or b"{}")
         except ValueError:
             js = {"error": data[:200].decode("utf-8", "replace")}
+        if res.status == 410 and isinstance(js, dict) and js.get("moved"):
+            # family calendar 0.1.18+: family photos moved to their own app (same Pi, port 8443, same pairing code)
+            raise SyncError(f"Family photos moved to the Family Photos app. Change the address to "
+                            f"https://{self.host}:8443 (your pairing code still works).")
         if res.status == 401:
-            raise SyncError("The calendar didn't accept the pairing code. Make a new one in the calendar admin "
-                            "(Photos > Family photos) and paste it here.")
+            raise SyncError("Family Photos didn't accept the pairing code. Make a new one in the Family Photos "
+                            "admin (https://<the Pi>:8443/admin/) and paste it here.")
         return res.status, js
 
     def json(self, method: str, path: str, obj=None) -> dict:
@@ -529,7 +535,8 @@ def test_connection(out) -> dict:
     if not st.get("writable"):
         return {"ok": False, "message": st.get("problem") or "The Pi can't write to its photo folder yet.",
                 "pi": st}
-    return {"ok": True, "message": f"Connected to the family calendar {st.get('version')}: "
+    who = "Family Photos" if st.get("app") == "family-photos" else "the family calendar"
+    return {"ok": True, "message": f"Connected to {who} {st.get('version')}: "
                                    f"{_fmt_bytes(st.get('free_bytes') or 0)} free on the photo drive.", "pi": st}
 
 

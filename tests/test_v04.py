@@ -342,36 +342,66 @@ def test_refuses_public_addresses():
         c.request("GET", "/api/photosync/status")
 
 
-def _calendar_src():
-    for p in (os.environ.get("FAMILY_CALENDAR_SRC"), Path(__file__).resolve().parents[2] / "family-calendar"):
-        if p and (Path(p) / "family_calendar" / "family_photos.py").exists():
+def _photos_src():
+    for p in (os.environ.get("FAMILY_PHOTOS_SRC"), Path(__file__).resolve().parents[2] / "family-photos"):
+        if p and (Path(p) / "family_photos" / "library.py").exists():
             return Path(p)
     return None
 
 
 @pytest.fixture
 def pi(tmp_path, monkeypatch):
-    """A real family calendar receiver (FAMILY_CALENDAR_SRC) on 127.0.0.1."""
-    src = _calendar_src()
+    """A real Family Photos receiver (FAMILY_PHOTOS_SRC) on 127.0.0.1 (moved out of family-calendar in 0.5.1)."""
+    src = _photos_src()
     if not src:
-        pytest.skip("family-calendar source not found (set FAMILY_CALENDAR_SRC)")
+        pytest.skip("family-photos source not found (set FAMILY_PHOTOS_SRC)")
     sys.path.insert(0, str(src))
-    from family_calendar.config import load_config
-    from family_calendar.server import App, Server, make_handler
-    from family_calendar.admin_auth import hash_password
+    from family_photos.config import load_config
+    from family_photos.server import App, Server, make_handler
+    from family_photos.auth import hash_password
     base = tmp_path / "pi"
     (base / "ssd").mkdir(parents=True)
-    env = {"PUBLIC_BASE_URL": "https://cal.home.example", "DATA_DIR": str(base / "data"), "PHOTO_WORKER": "false",
+    env = {"PUBLIC_BASE_URL": "", "DATA_DIR": str(base / "data"), "LOCAL_HTTP_BIND": "off",
+           "TLS_CERT_FILE": "", "TLS_KEY_FILE": "",
            "ADMIN_PASSWORD_HASH": hash_password("x", iterations=1000), "ADMIN_PASSWORD": "",
-           "FAMILY_PHOTOS_DIR": str(base / "ssd" / "family-photos")}
+           "LIBRARY_DIR": str(base / "ssd" / "family-photos")}
     for k, v in env.items():
         monkeypatch.setenv(k, v)
     app = App(load_config(base / "none.env"))
+    app.family = app.lib                                       # the receiver, as the tests below call it
     httpd = Server(("127.0.0.1", 0), make_handler(app))
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     yield app, f"http://127.0.0.1:{httpd.server_address[1]}"
     httpd.shutdown()
     httpd.server_close()
+
+
+def test_old_calendar_receiver_says_moved(tmp_path):
+    """family calendar 0.1.18+ answers /api/photosync/* with 410 {"moved": true}: tell the user the new address."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class H(BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = b'{"error": "moved", "moved": true, "app": "family-calendar"}'
+            self.send_response(410)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        out = tmp_path / "out"
+        out.mkdir()
+        sync.update_config(out, {"pi_url": f"http://127.0.0.1:{httpd.server_address[1]}", "token": "t" * 43})
+        res = sync.test_connection(out)
+        assert not res["ok"] and "https://127.0.0.1:8443" in res["message"] and "Family Photos" in res["message"]
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
 
 
 def test_sync_end_to_end_resume_and_deletions(sample_src, tmp_path, pi, monkeypatch, folder_trash):
