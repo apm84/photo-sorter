@@ -96,6 +96,8 @@ def tool(name: str) -> str | None:
     """Full path of ffmpeg/ffprobe (bundled first, then PATH), or None."""
     if name in _tools:
         return _tools[name]
+    if os.environ.get("PHOTOSORTER_FFMPEG_DIR") == "none":     # videos switched off (tests, troubleshooting)
+        return None
     exe = name + (".exe" if sys.platform == "win32" else "")
     found = None
     for d in _candidate_dirs():
@@ -197,6 +199,8 @@ def parse_video_time(s) -> datetime | None:
     try:
         dt = datetime(*(int(m.group(i)) for i in range(1, 7)))
     except ValueError:
+        return None
+    if dt.year < 1971:              # placeholders; also before converting (Windows can't for pre-1970 times)
         return None
     tz = m.group(7)
     if tz == "Z":

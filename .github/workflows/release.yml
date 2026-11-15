@@ -58,7 +58,7 @@ jobs:
           "PHOTOSORTER_FFMPEG_DIR=$pwd\packaging\ffmpeg\bin" >> $env:GITHUB_ENV
 
       - name: Tests (Windows, CPU)
-        run: python -m pytest -q -p no:cacheprovider
+        run: python -m pytest -q -rs -p no:cacheprovider
 
       - name: Build app (PyInstaller, one folder)
         run: |
