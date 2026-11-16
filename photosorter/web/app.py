@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import logging
 import re
 import subprocess
 import sys
@@ -24,6 +25,7 @@ from ..facegroup import METHODS, add_negative, quality_thresholds
 from ..pipeline import build_people_folders, cluster_faces, face_cluster_params, refresh_people
 
 STATIC = Path(__file__).parent / "static"
+log = logging.getLogger("photosorter")
 LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost", "testclient"}
 
 
@@ -1037,9 +1039,22 @@ def create_app(output_root: str | Path, enable_ai: bool = True) -> FastAPI:
 def serve(output_root: str | Path, port: int = 8765, open_browser: bool = True, page: str = ""):
     import uvicorn
 
+    from ..webserver import HOST, find_free_port, wait_until_ready
+
     app = create_app(output_root)
+    try:
+        bound = find_free_port(HOST, port, tries=1)
+    except RuntimeError:
+        bound = find_free_port(HOST, port)
+        log.warning("Port %s was taken; using %s", port, bound)
     if open_browser:
         import webbrowser
 
-        threading.Timer(1.0, lambda: webbrowser.open(f"http://127.0.0.1:{port}/{page}")).start()
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning", log_config=None)
+        def _open():
+            if wait_until_ready(HOST, bound):
+                webbrowser.open(f"http://{HOST}:{bound}/{page}")
+            else:
+                log.error("Search page did not start on port %s", bound)
+
+        threading.Thread(target=_open, daemon=True, name="photosorter-web-open").start()
+    uvicorn.run(app, host=HOST, port=bound, log_level="warning", log_config=None)

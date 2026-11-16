@@ -27,7 +27,8 @@ class App:
         self.q: queue.Queue = queue.Queue()
         self.pipeline: Pipeline | None = None
         self.thread: threading.Thread | None = None
-        self.web_port: int | None = None
+        self.web = None  # SearchServer, started once an index exists
+        self._web_lock = threading.Lock()
         st = self._load_state()
         self.s = Settings.from_dict(st)
 
@@ -113,6 +114,7 @@ class App:
         root.protocol("WM_DELETE_WINDOW", self.on_close)
         root.after(150, self.poll)
         root.after(4000, self.auto_update_check)
+        root.after(200, self.ensure_web_server)
         try:                                   # v0.5: move a source-install sync autostart over to the .exe
             from . import sync as _sync
 
@@ -186,6 +188,7 @@ class App:
         d = filedialog.askdirectory(title="Choose an output folder (preferably empty, on a drive with room)")
         if d:
             self.out_var.set(d)
+            self.ensure_web_server()
 
     def write_log(self, text: str):
         self.log.config(state="normal"); self.log.insert("end", text + "\n"); self.log.see("end"); self.log.config(state="disabled")
@@ -255,24 +258,51 @@ class App:
             self.pipeline.stop()
             self.write_log("Stopping after the current batch...")
 
+    def ensure_web_server(self):
+        """Start the search page in the background once this output folder has an index (no browser)."""
+        out = self.out_var.get().strip()
+        from .config import db_path
+
+        if not out or not db_path(Path(out)).exists():
+            return
+        if self.web is not None and self.web.same_root(out) and (self.web.is_running() or self.web.is_starting()):
+            return
+        threading.Thread(target=self._start_web, args=(out, False, ""), daemon=True, name="photosorter-web-start").start()
+
+    def _start_web(self, out: str, open_browser: bool, page: str):
+        from .webserver import SearchServer
+
+        with self._web_lock:
+            try:
+                if self.web is not None and not self.web.same_root(out):
+                    try:
+                        self.web.stop()
+                    except Exception:
+                        pass
+                    self.web = None
+                if self.web is None:
+                    self.web = SearchServer(out)
+                already = self.web.is_running()
+                self.web.start()
+                if not already:
+                    self.q.put({"kind": "log", "text": f"Search page ready at {self.web.url()}"})
+                if open_browser:
+                    webbrowser.open(self.web.url(page))
+            except Exception as e:
+                log.exception("Could not start the search page")
+                detail = getattr(self.web, "error", None) or str(e)
+                self.q.put({"kind": "web_error", "text": str(e), "detail": detail, "alert": open_browser})
+
     def open_web(self, page: str = ""):
         out = self.out_var.get().strip()
         from .config import db_path
 
         if not out or not db_path(Path(out)).exists():
             messagebox.showinfo("Photo Sorter", "Run the sorter on this output folder first."); return
-        if self.web_port is None:
-            import uvicorn
-
-            from .web.app import create_app
-
-            self.web_port = 8765
-            server = uvicorn.Server(uvicorn.Config(create_app(out), host="127.0.0.1", port=self.web_port,
-                                                   log_level="warning", log_config=None))
-            threading.Thread(target=server.run, daemon=True).start()
-            self.root.after(1200, lambda: webbrowser.open(f"http://127.0.0.1:{self.web_port}/{page}"))
-        else:
-            webbrowser.open(f"http://127.0.0.1:{self.web_port}/{page}")
+        if self.web is not None and self.web.same_root(out) and self.web.is_running():
+            webbrowser.open(self.web.url(page)); return
+        self.write_log("Starting search page...")
+        threading.Thread(target=self._start_web, args=(out, True, page), daemon=True, name="photosorter-web-open").start()
 
     def after_run_sync(self):
         """Family sync (v0.4): start the background sync after each sort run, if it is set up."""
@@ -413,6 +443,11 @@ class App:
             if not messagebox.askyesno("Photo Sorter", "Processing is running. Stop and close? Progress is saved."):
                 return
             self.pipeline.stop()
+        if self.web is not None:
+            try:
+                self.web.stop()
+            except Exception:
+                pass
         self.root.destroy()
 
     # ---- events -------------------------------------------------------------
@@ -459,9 +494,19 @@ class App:
                 self.write_log("Error: " + e["text"])
         elif k == "finished":
             self.after_run_sync()
+            self.ensure_web_server()
             self.bar.stop(); self.bar.config(mode="determinate", value=100)
             self.stage_lbl.config(text="Idle")
             self.b_start.config(state="normal"); self.b_pause.config(state="disabled"); self.b_stop.config(state="disabled")
+        elif k == "web_error":
+            self.write_log("Search page failed to start: " + e["text"])
+            if e.get("alert", True):
+                from .config import app_data_dir as _app_data_dir
+                logf = _app_data_dir() / "photosorter.log"
+                messagebox.showerror(
+                    "Photo Sorter",
+                    "Couldn't open the search page.\n\n" + e["text"]
+                    + "\n\nDetails were written to:\n" + str(logf))
         elif k == "paused":
             self.write_log("Paused.")
         elif k == "resumed":

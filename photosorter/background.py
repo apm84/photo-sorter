@@ -121,6 +121,21 @@ def lower_thread_priority(mode: str = "background") -> None:
         pass
 
 
+def boost_thread_priority() -> None:
+    """Raise just the calling thread so the search page stays responsive during a background scan.
+
+    Windows only (THREAD_PRIORITY_HIGHEST, relative to this process's priority class). No-op elsewhere.
+    """
+    if sys.platform != "win32":
+        return
+    try:  # pragma: no cover - Windows only
+        import ctypes
+
+        ctypes.windll.kernel32.SetThreadPriority(ctypes.windll.kernel32.GetCurrentThread(), 2)
+    except Exception:
+        pass
+
+
 def saved_mode() -> str:
     """The speed chosen in the Photo Sorter window (gui.json), for helper processes and threads."""
     try:

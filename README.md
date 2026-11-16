@@ -246,3 +246,11 @@ count. *Clean up > Clean up tasks > What Clean up has learned* shows it and has 
   on the Family sync page.
 - **Sync to Pi over the network** (Family sync page) is off by default, including for existing installs; while it is
   off nothing is sent to the Pi. Turn it on to use the photo (and video) sync described above.
+
+## Search page reliability (v0.6.1)
+
+- The search page starts when Photo Sorter opens (once an index exists) and stays up during a scan.
+  Opening it waits until the page is actually listening, instead of a fixed 1.2 second delay that
+  could fail with "refused to connect" while a scan was running. If port 8765 is already in use,
+  the next free port is used. Failures are written to `%LOCALAPPDATA%\PhotoSorter\photosorter.log`
+  and shown in the window, and the next click tries again.

@@ -186,3 +186,15 @@
 - `sync.json` key `network_sync` (default False; existing files without it read as False). `Syncer.run`,
   `request_sync`, `request_after_run` and `daemon_main` do nothing while it's off; `status()["line"]` says "off".
   The checkbox is injected by `sync.js` (sync.html is unchanged). Test: `test_network_sync_switch_off_by_default`.
+
+### v0.6.1: search page server
+- New `photosorter/webserver.py`: `SearchServer` starts uvicorn in a daemon thread, waits until the
+  port accepts connections (up to 30 s), tries the next port if 8765 is taken, catches `SystemExit`
+  from uvicorn bind failures, and logs a full traceback. `boost_thread_priority()` (Windows
+  THREAD_PRIORITY_HIGHEST) keeps the server thread scheduled during a background/lowest-priority scan.
+- GUI: the server starts when the window opens if the output folder already has an index, and again
+  after a run finishes (`finished` → `ensure_web_server`). `open_web` logs "Starting search page..."
+  and waits for readiness before opening the browser; failures go to `photosorter.log` and a
+  message box, and state is reset so the next click retries. CLI `web` (`serve()`) also waits until
+  ready and falls over to the next port.
+- Tests: `tests/test_webserver.py`.
