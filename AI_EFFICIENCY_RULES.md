@@ -154,3 +154,20 @@ At meaningful checkpoints, preserve completed work and decisions in reusable pro
 When coordinating other AI development agents, ensure they follow the same guidelines.
 
 **The overriding goal is to deliver correct, secure, maintainable and fully tested software with the least practical amount of wasted effort, time and expense.**
+
+## 10. Remember Repository Facts, Break Loops, Trim Tools
+
+Adapted from Microsoft Research's TokenEconomizer (2026), which measured 18–31% lower agent cost on SWE-Bench with these three habits.
+
+- **Remember repository facts.** Keep a short "Repository facts" list at the end of this file: commands that work here, required setup steps, environment quirks, where generated files live. Read it before starting. Add a fact only after it has been confirmed in at least two sessions, keep each to one line, and delete it as soon as a session contradicts it.
+- **Break failure loops.** If the same error appears three times in one task, stop retrying. Re-read the error, change the approach, or report what is blocking. Never repeat an identical failing command.
+- **Trim unused tools.** Every loaded tool definition is sent with every request. Disable MCP servers, plugins and tools that this project never uses, and re-enable them only when a task needs them.
+
+## Repository facts
+
+- Run tests with `.venv/bin/python -m pytest -q` (plain `pytest` is not on PATH); model tests skip unless the model files are present.
+- The Windows installer is built only by the "Windows installer" GitHub Actions run on `windows-latest`; a release is published by pushing a `v<version>` tag after that run passes.
+- Windows CI differs from Linux on sockets and file locking: avoid tests that probe an un-accepted listening socket more than once.
+- AI models ship in the `models-v1` release (never marked latest); in-app updates read only `v*` releases and verify `SHA256SUMS.txt`.
+- The version lives in `photosorter/__init__.py` (`__version__`); release notes go in `docs/releases/v<version>.md`.
+- This repository is public: grep for personal names, emails, private domains, LAN IPs and real geotags before every commit.
