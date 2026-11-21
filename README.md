@@ -182,6 +182,14 @@ that don't belong and choose **Actions > Remove from suggestion**, **Rename** it
 album of hard links) or **Dismiss** (it won't come back). It only reads the index the sort run made (no AI model
 runs again), so it takes seconds; nothing leaves the PC and originals are never touched.
 
+**Sort albums (0.9).** The Albums page and Suggested albums each have a **Sort** list: *Name* (or *Newest* for
+suggestions), *Number of photos (high to low)* and *Relevance / quality*. Relevance is a 0-100 score for how
+likely the album is a real, good event album: number of photos, how close together in time and place they are,
+how many show people you named, image size and sharpness, how few screenshots/memes/duplicates it has and, for
+suggestions, how many photos show the scene in its name. Hover an album to see the score broken down; the
+formula is documented at the top of `photosorter/albumscore.py`. In a suggestion, **Actions > Add to album...**
+puts the selected photos into an existing or new album (hard links, no extra copies).
+
 **Family sync to the family calendar Pi.** The library stays on this PC; a one-way copy of what the family needs
 goes to the Pi's SSD over your home network, so everyone can browse it on their phones (the calendar's
 `/family/` app) and the TV can show your albums as slideshows.

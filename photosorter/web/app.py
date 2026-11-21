@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from ..config import db_path, index_dir
 from ..db import DB, blob_to_vec
 from ..imaging import open_image
-from .. import albums, cleanup, suggest as suggestmod, thumbs as thumbcache, video
+from .. import albums, albumscore, cleanup, suggest as suggestmod, thumbs as thumbcache, video
 from ..facegroup import METHODS, add_negative, quality_thresholds
 from ..pipeline import build_people_folders, cluster_faces, face_cluster_params, refresh_people
 
@@ -866,8 +866,13 @@ def create_app(output_root: str | Path, enable_ai: bool = True) -> FastAPI:
             raise HTTPException(409, str(e))
 
     @app.get("/api/albums")
-    def albums_list():
-        return {"albums": albums.list_albums(db)}
+    def albums_list(scores: bool = False):
+        lst = albums.list_albums(db)
+        if scores:                     # v0.9: Relevance / quality sort (albumscore.py explains the score)
+            for a in lst:
+                s = albumscore.score_album(db, a["id"])
+                a.update(score=s["score"], score_text=s["text"], score_parts=s["parts"])
+        return {"albums": lst}
 
     @app.post("/api/albums")
     def albums_create(body: AlbumBody, x_photosorter: str | None = Header(None)):
@@ -946,8 +951,13 @@ def create_app(output_root: str | Path, enable_ai: bool = True) -> FastAPI:
             raise HTTPException(409, str(e))
 
     @app.get("/api/suggestions")
-    def suggestions_list():
-        return {"suggestions": suggestmod.list_open(db)}
+    def suggestions_list(scores: bool = False):
+        lst = suggestmod.list_open(db)
+        if scores:
+            for s in lst:
+                sc = albumscore.score_suggestion(db, s["id"])
+                s.update(score=sc["score"], score_text=sc["text"], score_parts=sc["parts"])
+        return {"suggestions": lst}
 
     @app.post("/api/suggestions/find")
     def suggestions_find(x_photosorter: str | None = Header(None)):

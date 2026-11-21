@@ -823,7 +823,12 @@ class Syncer:
             return p if p.is_file() else None
         if it["kind"] in ("f", "x"):
             return it["path"] if Path(it["path"]).is_file() else None
-        self.gate.wait()                      # making a preview is real CPU work: let the user go first
+        kind = "thumb" if it["kind"] == "t" else "preview"
+        if not thumbs.is_fresh(self.out, it["row"], kind):
+            # v0.9: only making a preview is real CPU work, so only then let the user go first. Before, every
+            # thumbnail and preview waited here (up to 20 s each) while the PC was in use, even when it was
+            # already in the cache and just had to be sent.
+            self.gate.wait()
         try:
             return thumbs.ensure(self.out, it["row"], "thumb" if it["kind"] == "t" else "preview")
         except Exception:

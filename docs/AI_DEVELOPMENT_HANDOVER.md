@@ -239,3 +239,21 @@
   suggestion, Rename, Keep as album, Dismiss. Merge of suggestions was skipped.
 - GUI: `after_run_suggest()` runs `suggest.find` in a below-normal-priority thread after each sort run.
 - Tests: `tests/test_v08.py` (clustering, exclusions, naming, album/dismiss memory, endpoints, a real index).
+
+### v0.9.0: image sizing, album sort/score, Add to album from suggestions, sync wait fix
+- Images: the viewer stage is now one definite grid cell (`grid-template:minmax(0,1fr)/minmax(0,1fr)`), so the
+  1600 px preview fits (it used to keep its natural height in an auto row and was cut off). Also `img{max-width:100%}`,
+  `min-width:0` on grid children (`.grid`, `.named`, `.album-wrap`, `.cu-tiles`), `overflow:hidden` on card boxes,
+  and album/suggestion covers that fail to load become the empty-cover tile. Checked with Playwright at 360 and
+  1200 px (the 360 px header nav still overflows; that's text, not images, and was left alone).
+- `photosorter/albumscore.py`: `score_files`, `score_album`, `score_suggestion`; weighted signals size/time/place/
+  people/quality/clean (+ scene for suggestions), unmeasurable ones left out. Table in the module docstring.
+  `/api/albums?scores=1` and `/api/suggestions?scores=1` add `score`, `score_text`, `score_parts` (only when asked).
+  `albums.js` adds Sort selects (saved in localStorage `ps-sort-albums` / `ps-sort-suggested`).
+- Suggestion review Actions gains "Add to album..." (reuses `PS.addToAlbum` and `/api/albums/add`, hard links).
+- Sync: `Syncer._path_for` called `IdleGate.wait()` for every thumbnail/preview, even ones already cached, so while
+  the PC was in use each file could wait up to 20 s before being sent. Now it waits only when the preview has to be
+  made (`thumbs.is_fresh`). Other speed findings (not changed): full-size originals are most of the bytes and the
+  TV only uses previews; 2 MB/s default cap; one request per file with two fsyncs per finished file on the Pi's SD
+  card; Pi 2 USB 2.0 bus shared by the Wi-Fi adapter and the SSD; serial uploads.
+- Tests: `tests/test_v09.py`.

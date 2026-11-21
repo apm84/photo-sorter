@@ -239,3 +239,17 @@ section.person{content-visibility:auto;contain-intrinsic-size:auto 230px}
 .suggested-section{margin-top:28px}
 .suggestion-card{border-style:dashed}
 #sugg-view>p.status{padding:0 16px}
+/* v0.9: images never render at full size or spill out of their boxes */
+img{max-width:100%}
+/* viewer: one definite cell, so max-height:100% is measured against the stage (a 1600 px preview used to keep its
+   natural height in an auto row and was cut off at the bottom); videos the same */
+.viewer-stage{grid-template:minmax(0,1fr)/minmax(0,1fr)}
+.viewer-stage>img,.viewer-stage>video,.viewer-stage>.viewer-wait{grid-area:1/1;min-width:0;min-height:0}
+.viewer-stage>img,.viewer-stage>video{max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;display:block}
+/* grids: a big picture can't widen its column (grid items default to min-width:auto = the picture's size) */
+.grid>*,.named>*,.album-wrap>*,.cu-tiles>*{min-width:0}
+.card-open,.named-card,.upnext-thumb{overflow:hidden}
+.albums .named-card img{display:block;max-width:100%;object-fit:cover}
+.named-name{overflow-wrap:anywhere}
+/* v0.9: sort control on the Albums page */
+.sort-ctl{display:inline-flex;gap:6px;align-items:center;margin-left:auto;font-size:14px}

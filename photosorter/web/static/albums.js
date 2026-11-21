@@ -47,8 +47,34 @@ async function albumAction(action) {
   } catch (e) { say(e.message); alert(e.message); }
 }
 
+// v0.9: sort albums and suggestions by name/newest, number of photos, or relevance / quality (albumscore.py)
+const SORTS = {albums: [["name", "Name"], ["count", "Number of photos (high to low)"], ["score", "Relevance / quality"]],
+               suggested: [["newest", "Newest"], ["count", "Number of photos (high to low)"], ["score", "Relevance / quality"]]};
+function sortControl(kind, head, onChange) {
+  const id = `sort-${kind}`;
+  if ($(id)) return $(id);
+  const l = document.createElement("label"); l.className = "sort-ctl";
+  l.innerHTML = `Sort <select id="${id}">${SORTS[kind].map(([v, t]) => `<option value="${v}">${esc(t)}</option>`).join("")}</select>`;
+  head.appendChild(l);
+  const sel = $(id);
+  const saved = localStorage.getItem(`ps-${id}`);
+  if (saved && SORTS[kind].some(([v]) => v === saved)) sel.value = saved;
+  sel.onchange = () => { localStorage.setItem(`ps-${id}`, sel.value); onChange(); };
+  return sel;
+}
+function sortList(arr, how) {
+  if (how === "count") arr.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  else if (how === "score") arr.sort((a, b) => (b.score ?? -1) - (a.score ?? -1) || b.count - a.count);
+  return arr;
+}
+function countLine(a, how) {
+  return `${PS.plural(a.count, "photo")}${how === "score" && a.score != null ? ` · score ${a.score}` : ""}`;
+}
+
 async function loadList() {
-  const {albums} = await api("/api/albums");
+  const how = sortControl("albums", $("list-view").querySelector(".gallery-head"), loadList).value;
+  const {albums} = await api(`/api/albums${how === "score" ? "?scores=1" : ""}`);
+  sortList(albums, how);
   list = albums; const ids = new Set(albums.map(a => a.id));
   for (const id of [...asel]) if (!ids.has(id)) asel.delete(id);
   const box = $("albums"); box.replaceChildren();
@@ -59,8 +85,9 @@ async function loadList() {
     w.className = "album-wrap"; w.dataset.id = a.id; w.setAttribute("role", "listitem");
     const el = document.createElement("a");
     el.className = "named-card album-card"; el.href = `/albums?album=${a.id}`;
-    el.innerHTML = `${a.cover ? `<img loading="lazy" src="/thumb/${a.cover}.jpg" alt="">` : `<span class="noface" aria-hidden="true">&#9633;</span>`}
-      <span class="named-name">${esc(a.name)}</span><span class="named-count">${PS.plural(a.count, "photo")}</span>`;
+    el.innerHTML = `${a.cover ? `<img loading="lazy" decoding="async" src="/thumb/${a.cover}.jpg" alt="" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'noface',textContent:'\u25A1'}))">` : `<span class="noface" aria-hidden="true">&#9633;</span>`}
+      <span class="named-name">${esc(a.name)}</span><span class="named-count">${countLine(a, how)}</span>`;
+    if (a.score_text) el.title = a.score_text;
     el.onclick = e => {
       if (asel.size && (e.ctrlKey || e.metaKey || e.shiftKey)) { e.preventDefault(); toggle(i, e.shiftKey); return; }
       if (e.ctrlKey || e.metaKey || e.shiftKey) return; e.preventDefault(); openAlbum(a.id, true); };
@@ -225,15 +252,17 @@ function suggSection() {
 }
 async function loadSuggestions() {
   suggSection();
+  const how = sortControl("suggested", $("suggested").parentElement.querySelector(".gallery-head"), loadSuggestions).value;
   let list = [];
-  try { list = (await api("/api/suggestions")).suggestions; } catch { return; }
+  try { list = sortList((await api(`/api/suggestions${how === "score" ? "?scores=1" : ""}`)).suggestions, how); } catch { return; }
   const box = $("suggested"); box.replaceChildren();
   if (!list.length) { box.innerHTML = `<p class="status empty">No suggestions right now. Press Find suggestions to look again.</p>`; return; }
   for (const s of list) {
     const el = document.createElement("a");
     el.className = "named-card album-card suggestion-card"; el.href = `/albums?suggestion=${s.id}`; el.setAttribute("role", "listitem");
-    el.innerHTML = `${s.cover ? `<img loading="lazy" src="/thumb/${s.cover}.jpg" alt="">` : `<span class="noface" aria-hidden="true">&#9633;</span>`}
-      <span class="named-name">${esc(s.name)}</span><span class="named-count">${PS.plural(s.count, "photo")}</span>`;
+    el.innerHTML = `${s.cover ? `<img loading="lazy" decoding="async" src="/thumb/${s.cover}.jpg" alt="" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'noface',textContent:'\u25A1'}))">` : `<span class="noface" aria-hidden="true">&#9633;</span>`}
+      <span class="named-name">${esc(s.name)}</span><span class="named-count">${countLine(s, how)}</span>`;
+    if (s.score_text) el.title = s.score_text;
     el.onclick = e => { if (e.ctrlKey || e.metaKey || e.shiftKey) return; e.preventDefault(); openSuggestion(s.id, true); };
     box.appendChild(el);
   }
@@ -243,14 +272,19 @@ function suggBar() {
   bar.innerHTML = `<span class="selbar-count" aria-live="polite"></span>
     <button type="button" class="ssel-all">Select all</button>
     <select class="ssel-action" aria-label="Actions for the selected photos" hidden><option value="">Actions...</option>
-      <option value="remove">Remove from suggestion</option></select>
+      <option value="remove">Remove from suggestion</option><option value="album">Add to album...</option></select>
     <button type="button" class="ssel-clear" hidden>Clear selection</button>`;
   bar.querySelector(".ssel-all").onclick = () => sgrid.selectAll();
   bar.querySelector(".ssel-clear").onclick = () => sgrid.clearSelection();
   bar.querySelector(".ssel-action").onchange = async e => {
     const v = e.target.value; e.target.value = "";
-    if (v !== "remove") return;
     const ids = [...sgrid.sel]; if (!ids.length) return;
+    if (v === "album") {        // v0.9: existing or new album (hard links, like every album)
+      const r = await PS.addToAlbum(ids, say);
+      if (r) sgrid.clearSelection();
+      return;
+    }
+    if (v !== "remove") return;
     try {
       const r = await api(`/api/suggestions/${sugg.id}/remove`, {file_ids: ids});
       sugg = {...sugg, count: r.count};

@@ -46,6 +46,15 @@ def version(row) -> str:
     return f"{int(row['mtime'] or 0)}-{row['size'] or 0}"
 
 
+def is_fresh(out: Path, row, kind: str = "thumb") -> bool:
+    """True if the cached thumbnail/preview exists and is not older than the photo (nothing to make)."""
+    p = cache_path(out, row["id"], kind)
+    try:
+        return p.exists() and p.stat().st_mtime >= source_path(out, row).stat().st_mtime
+    except OSError:
+        return p.exists()
+
+
 def ensure(out: Path, row, kind: str = "thumb") -> Path:
     """Path of the cached thumbnail/preview, generating it only if missing or older than the photo."""
     p = cache_path(out, row["id"], kind)
