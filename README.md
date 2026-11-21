@@ -176,6 +176,12 @@ changes straight away; thread limits apply from the next Start. Command line: `r
 **Family sync to the family calendar Pi.** The library stays on this PC; a one-way copy of what the family needs
 goes to the Pi's SSD over your home network, so everyone can browse it on their phones (the calendar's
 `/family/` app) and the TV can show your albums as slideshows.
+- **Since 0.7, only the albums you pick are sent.** On the **Albums** page, select albums (click the circle on an
+  album; Shift-click selects a range), then choose **Actions > Sync with CalendarPeace**. Picked albums show a
+  green **Synced** badge. Nothing else from the library is sent, and no single files. **Actions > Stop syncing**
+  removes that album's photos from the Pi on the next sync (unless another synced album also has them), and
+  **Actions > Delete...** deletes the selected albums (photos stay in your library). With no album picked, the Pi
+  ends up with nothing and the Family sync page says "No albums selected for CalendarPeace".
 - Sent: a catalog (dates, places, named people, albums), 400 px thumbnails, 1600 px previews, a face picture per
   named person and, optionally, the full-size sorted photos. Thumbnails and previews go first. Removed or
   deduplicated photos are deleted on the Pi at the end of each sync. Nothing on the PC is changed.

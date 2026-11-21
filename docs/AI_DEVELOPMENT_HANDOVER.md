@@ -198,3 +198,24 @@
   message box, and state is reset so the next click retries. CLI `web` (`serve()`) also waits until
   ready and falls over to the next port.
 - Tests: `tests/test_webserver.py`.
+
+### v0.7.0: Family sync sends only albums picked for CalendarPeace
+- Owner decision: Family sync must send ONLY albums selected in the Photo Sorter browser UI; never the whole library
+  and never single files.
+- DB: `albums.sync_to_pi INTEGER DEFAULT 0` (in the CREATE TABLE and in `MIGRATIONS` for older indexes).
+  `albums.list_albums`/`get_album` return `synced`; `albums.set_sync(db, out, ids, on)` sets it.
+- Web: `POST /api/albums/action` `{album_ids, action: "sync"|"unsync"|"delete", confirm}` (X-PhotoSorter header;
+  delete needs `confirm`). The Albums list uses one selection (same `.card-sel` circle as photo grids, Shift-click
+  range) plus an Actions select (Sync with CalendarPeace, Stop syncing, Delete...) built in `albums.js`; a green
+  "Synced" badge marks picked albums (also next to the title inside an album). albums.html is unchanged.
+- `sync.build_plan`: rows = files in albums with `sync_to_pi=1` (same keeper/rep/not-removed filters as before);
+  albums = only picked albums; people = only named people in those photos; returns `synced_albums`. The old
+  "all non-screenshot photos + every album" scope is gone; `include_screenshots` is no longer used (its checkbox
+  still shows on the sync page because existing UI text was left unchanged).
+  No album picked = empty catalog, so the receiver's commit removes everything it holds under media/.
+- `sync.status()` adds `albums_selected` and `no_albums_message`; `status_line` says
+  "Family sync: no albums selected for CalendarPeace" (page chip and sync page).
+- Family Photos receiver (family-photos 1.1.0) needed no change: it accepts an empty catalog.
+- Tests: `test_build_plan_sends_only_albums_picked_for_calendarpeace`, `test_album_actions_endpoint`,
+  `test_albums_sync_column_is_added_to_old_indexes`; the end-to-end sync tests pick albums via
+  `sync_album_of_everything()` and check Stop syncing / no-albums behaviour against the real receiver.
