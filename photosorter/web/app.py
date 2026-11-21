@@ -80,6 +80,12 @@ class AlbumFilesBody(BaseModel):
     name: str | None = None            # a new album's name
 
 
+class AlbumActionBody(BaseModel):          # v0.7: Albums page, Actions menu on selected albums
+    album_ids: list[int]
+    action: str                        # "delete", "sync" (Sync with CalendarPeace) or "unsync" (Stop syncing)
+    confirm: bool = False
+
+
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 BROWSER_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
 IMMUTABLE = "public, max-age=31536000, immutable"
@@ -901,6 +907,28 @@ def create_app(output_root: str | Path, enable_ai: bool = True) -> FastAPI:
         if not body.confirm:
             raise HTTPException(400, "confirmation required")
         return album_call(albums.delete_album, aid)
+
+    @app.post("/api/albums/action")
+    def albums_action(body: AlbumActionBody, x_photosorter: str | None = Header(None)):
+        """v0.7: one action for the albums selected on the Albums page: delete, sync (to CalendarPeace) or unsync."""
+        require_local_header(x_photosorter)
+        ids = sorted(set(body.album_ids))
+        if not ids:
+            raise HTTPException(400, "select one or more albums")
+        if body.action in ("sync", "unsync"):
+            return album_call(albums.set_sync, ids, body.action == "sync")
+        if body.action == "delete":
+            if not body.confirm:
+                raise HTTPException(400, "confirmation required")
+            done = []
+            for aid in ids:
+                try:
+                    albums.delete_album(db, out, aid)
+                    done.append(aid)
+                except albums.AlbumError:
+                    pass
+            return {"deleted": done}
+        raise HTTPException(400, "unknown action")
 
     @app.post("/api/albums/{aid}/open")
     def albums_open(aid: int, x_photosorter: str | None = Header(None)):

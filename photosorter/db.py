@@ -79,7 +79,8 @@ CREATE TABLE IF NOT EXISTS albums (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
     folder TEXT NOT NULL,         -- folder name under Albums/
-    created_at TEXT
+    created_at TEXT,
+    sync_to_pi INTEGER DEFAULT 0  -- v0.7: 1 = Family sync sends this album to CalendarPeace (only these are sent)
 );
 CREATE TABLE IF NOT EXISTS album_items (
     album_id INTEGER NOT NULL,
@@ -147,6 +148,7 @@ MIGRATIONS = {
               ("suggest_person", "INTEGER"), ("suggest_sim", "REAL"),
               ("frame_t", "REAL")],          # v0.6: video faces: seconds into the video of the sampled frame
     "people": [("refs", "BLOB"), ("ref_count", "INTEGER DEFAULT 0"), ("negs", "BLOB")],
+    "albums": [("sync_to_pi", "INTEGER DEFAULT 0")],   # v0.7: picked for Family sync (Sync with CalendarPeace)
     # v0.6 videos: media='video' (NULL = photo), length, codecs, browser-playable as is, Live Photo clip
     "files": [("media", "TEXT"), ("duration", "REAL"), ("vcodec", "TEXT"), ("acodec", "TEXT"),
               ("playable", "INTEGER"), ("live", "INTEGER DEFAULT 0")],

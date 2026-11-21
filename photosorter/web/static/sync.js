@@ -22,10 +22,11 @@
   function render(s) {
     cur = s;
     $("line").textContent = s.line;
-    $("line").className = "banner " + (s.state.phase === "error" ? "warn" : s.state.last_ok_at ? "ok" : "");
+    $("line").className = "banner " + (s.state.phase === "error" || s.albums_selected === 0 ? "warn" : s.state.last_ok_at ? "ok" : "");
     $("pause").textContent = s.paused ? "Resume" : "Pause";
     $("now").disabled = !s.configured;
     const st = s.state, bits = [];
+    if (s.no_albums_message) bits.push(s.no_albums_message);   // v0.7: only picked albums are sent
     if (st.photos != null) bits.push(`${st.photos.toLocaleString()} photos, ${st.people} people, ${st.albums} albums in the catalog`);
     if (st.phase === "sending" && st.total_items) bits.push(`${st.remaining_items.toLocaleString()} of ${st.total_items.toLocaleString()} files left (about ${fmtBytes(st.remaining_bytes || 0)})`);
     if (st.bytes_sent) bits.push(`${fmtBytes(st.bytes_sent)} sent this run`);

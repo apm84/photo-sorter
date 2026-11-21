@@ -259,7 +259,7 @@ def test_version_compare():
     assert not updater.is_newer("v0.5.0", "0.5.0") and not updater.is_newer("v0.4.9", "0.5.0")
     assert updater.is_newer("v0.6.0", "0.6.0rc1") and not updater.is_newer("v0.6.0rc1", "0.6.0")
     assert updater.parse_version("garbage") == (0, 0, 0, 0, 0)
-    assert __version__ == "0.6.1"
+    assert __version__ == "0.7.0"
 
 
 def _release(tag="v0.6.0", sha="a" * 64, digest=None, sums=True, draft=False):

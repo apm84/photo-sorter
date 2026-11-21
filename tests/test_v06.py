@@ -15,6 +15,7 @@ from photosorter.pipeline import Pipeline, pick_video_faces
 
 from .conftest import exif_bytes, scene, tree_hashes
 from .test_v04 import pi  # noqa: F401  (the real Family Photos receiver fixture)
+from .test_v04 import sync_album_of_everything
 
 H = {"X-PhotoSorter": "1"}
 needs_ffmpeg = pytest.mark.skipif(not video.available(), reason="ffmpeg/ffprobe not found")
@@ -281,6 +282,7 @@ def test_videos_sync_last_chunked_and_checked(vsrc, tmp_path, pi, monkeypatch): 
     out = tmp_path / "out"
     run(vsrc, out)
     db = DB(db_path(out))
+    sync_album_of_everything(db, out)
     tok = app.family.new_token()
     sync.update_config(out, {"network_sync": True, "pi_url": url, "token": tok, "max_mbps": 50, "include_full": True})
     monkeypatch.setattr(sync, "CHUNK", 64 * 1024)
@@ -325,6 +327,7 @@ def test_videos_sync_last_chunked_and_checked(vsrc, tmp_path, pi, monkeypatch): 
 def test_old_family_photos_gets_no_videos(vsrc, tmp_path):
     out = tmp_path / "out"
     run(vsrc, out)
+    sync_album_of_everything(DB(db_path(out)), out)
     plan = sync.build_plan(out, {**sync.DEFAULTS, "include_videos": False})
     assert all(r.get("mv") != "video" for r in plan["photos"])
     assert not any(it["kind"] in ("v", "x") for it in plan["items"])

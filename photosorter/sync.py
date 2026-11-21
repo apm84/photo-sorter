@@ -6,10 +6,15 @@ sync-control.json, sync-cache.sqlite, sync-cache/ face crops) plus the normal th
 
 What goes to the Pi (receiver: the Family Photos app's /api/photosync/*, port 8443, LAN only, pairing token;
 before 0.5.1 / family calendar 0.1.18 the receiver was inside family-calendar):
-  * a catalog (gzip NDJSON): photos with date, size, place, people and albums; named people; albums
+  * v0.7: ONLY the albums picked on the Albums page (select albums, Actions > Sync with CalendarPeace;
+    albums.sync_to_pi=1). Nothing else from the library is sent, and no single files. With no album picked the
+    catalog is empty, so the Pi ends up with nothing. "Stop syncing" removes an album's photos from the Pi on the
+    next sync unless another synced album holds them.
+  * a catalog (gzip NDJSON): the photos in those albums with date, size, place, people and albums; the named
+    people seen in them; the synced albums
   * thumbnails (400 px) and previews (1600 px) from the existing _index/thumbs cache
   * optionally the full-size sorted copies (Settings: "Also send full-size photos")
-  * one face picture per named person
+  * one face picture per named person who appears in those photos
 Order: catalog, faces, thumbnails, previews, then full-size, so the family app is useful early.
 
 Transfer: HTTP(S) POSTs of <= 1 MB chunks with offsets, so an interrupted upload resumes where it stopped; the
@@ -61,7 +66,7 @@ DEFAULTS = {
     "window_start": "23:00",
     "window_end": "06:00",
     "include_full": True,          # also send full-size photos (largest part; previews go first)
-    "include_screenshots": False,  # photos only by default; albums are always included
+    "include_screenshots": False,  # unused since v0.7 (only picked albums are sent, whatever their type)
     "interval_minutes": 60,        # look for changes this often while the worker runs
     "auto_after_run": True,        # start a sync after each sort run
     "verify_tls": True,
@@ -202,15 +207,37 @@ def configured(out) -> bool:
     return bool(load_config(out)["pi_url"] and get_token(out))
 
 
+def synced_album_count(out) -> int | None:
+    """v0.7: how many albums are picked for CalendarPeace (None if there's no index yet)."""
+    p = db_path(Path(out))
+    if not p.is_file():
+        return None
+    try:
+        con = sqlite3.connect(f"file:{p.as_posix()}?mode=ro", uri=True, timeout=5)
+        try:
+            return int(con.execute("SELECT COUNT(*) FROM albums WHERE COALESCE(sync_to_pi, 0)=1").fetchone()[0])
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return None
+
+
+NO_ALBUMS_MESSAGE = ("No albums selected for CalendarPeace. On the Albums page, select albums and choose "
+                     "Actions > Sync with CalendarPeace. Only those albums are sent.")
+
+
 def status(out) -> dict:
     cfg = load_config(out)
+    picked = synced_album_count(out)
     st = read_state(out)
     ctrl = read_control(out)
     running = worker_alive(out)
     return {"config": cfg, "paired": bool(get_token(out)), "configured": configured(out), "state": st,
             "paused": bool(ctrl.get("paused")), "worker_running": running, "autostart": autostart_installed(),
-            "line": status_line(st, bool(ctrl.get("paused")), running, configured(out), bool(cfg.get("network_sync"))),
-            "network_sync": bool(cfg.get("network_sync"))}
+            "line": status_line(st, bool(ctrl.get("paused")), running, configured(out), bool(cfg.get("network_sync")),
+                                picked),
+            "network_sync": bool(cfg.get("network_sync")), "albums_selected": picked,
+            "no_albums_message": NO_ALBUMS_MESSAGE if picked == 0 else None}
 
 
 def network_on(out) -> bool:
@@ -221,11 +248,14 @@ def network_on(out) -> bool:
 OFF_MESSAGE = "Sync to Pi over the network is off. Turn it on in the Family sync settings to send photos to the Pi."
 
 
-def status_line(st: dict, paused: bool, running: bool, is_configured: bool, network: bool = True) -> str:
+def status_line(st: dict, paused: bool, running: bool, is_configured: bool, network: bool = True,
+                albums_selected: int | None = None) -> str:
     if not is_configured:
         return "Family sync: not set up"
     if not network:
         return "Family sync: off (sync to Pi over the network is turned off)"
+    if albums_selected == 0 and not (running and st.get("phase") in ("sending", "preparing", "checking", "catalog")):
+        return "Family sync: no albums selected for CalendarPeace"
     last = st.get("last_ok_at")
     when = _fmt_when(last) if last else "never"
     if paused:
@@ -638,20 +668,22 @@ def build_plan(out, cfg: dict, db=None) -> dict:
     own = db is None
     db = db or DB(db_path(out))
     try:
-        types = ("photo", "screenshot") if cfg.get("include_screenshots") else ("photo",)
         videos = bool(cfg.get("include_videos"))
-        if videos:
-            types += ("video",)
-        album_files = {r[0] for r in db.query("SELECT DISTINCT file_id FROM album_items")}
+        # v0.7: only albums picked for CalendarPeace (Albums page: Actions > Sync with CalendarPeace)
+        albums = [dict(a) for a in db.query("SELECT id, name FROM albums WHERE COALESCE(sync_to_pi, 0)=1 "
+                                            "ORDER BY lower(name)")]
+        aids = {a["id"] for a in albums}
+        album_items = [it for it in db.query("SELECT album_id, file_id FROM album_items ORDER BY added_at, file_id")
+                       if it["album_id"] in aids]
+        album_files = {it["file_id"] for it in album_items}
         rows = db.query(
             "SELECT f.id, f.filename, f.ext, f.taken_at, f.width, f.height, f.place, f.size, f.mtime, f.sha256, "
             "f.src_path, f.dest_path, f.type, f.media, f.duration, f.playable, f.live, v.proxy "
             "FROM files f LEFT JOIN file_review fr ON fr.file_id=f.id LEFT JOIN videos v ON v.file_id=f.id "
             "WHERE (f.is_keeper IS NULL OR f.is_keeper=1) AND (f.rep_id IS NULL OR f.rep_id=f.id) "
             "AND f.dest_path IS NOT NULL AND f.sha256 IS NOT NULL AND COALESCE(fr.state, '') <> 'remove' "
-            "ORDER BY f.taken_at DESC, f.id DESC")
-        rows = [r for r in rows if (r["type"] in types and not (r["live"] and r["media"] == "video"))
-                or r["id"] in album_files]
+            "ORDER BY f.taken_at DESC, f.id DESC") if album_files else []
+        rows = [r for r in rows if r["id"] in album_files]
         if not videos:      # a Pi without video support (Family Photos before 1.1) or videos switched off
             rows = [r for r in rows if r["media"] != "video"]
         ids = {r["id"] for r in rows}
@@ -662,9 +694,8 @@ def build_plan(out, cfg: dict, db=None) -> dict:
         for f in db.query("SELECT DISTINCT file_id, person_id FROM faces WHERE person_id IS NOT NULL"):
             if f["person_id"] in pids and f["file_id"] in ids:
                 person_of.setdefault(f["file_id"], set()).add(f["person_id"])
-        albums = [dict(a) for a in db.query("SELECT id, name FROM albums ORDER BY lower(name)")]
         album_of: dict[int, list] = {}
-        for it in db.query("SELECT album_id, file_id FROM album_items ORDER BY added_at, file_id"):
+        for it in album_items:
             if it["file_id"] in ids:
                 album_of.setdefault(it["file_id"], []).append(it["album_id"])
         recs, items = [], []
@@ -715,7 +746,7 @@ def build_plan(out, cfg: dict, db=None) -> dict:
                          "face_id": cover[0] if cover else None})
         arec = [{"t": "album", "id": a["id"], "n": a["name"], "count": len(per_album.get(a["id"], [])),
                  "cover": (per_album.get(a["id"]) or [None])[0]} for a in albums if per_album.get(a["id"])]
-        return {"photos": recs, "people": prec, "albums": arec, "items": items}
+        return {"photos": recs, "people": prec, "albums": arec, "items": items, "synced_albums": len(albums)}
     finally:
         if own:
             db.close()

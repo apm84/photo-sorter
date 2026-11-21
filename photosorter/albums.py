@@ -62,7 +62,7 @@ def _folder_for(db: DB, name: str, exclude_id: int | None = None) -> str:
 
 def list_albums(db: DB) -> list[dict]:
     rows = db.query(
-        "SELECT a.id, a.name, a.folder, a.created_at, "
+        "SELECT a.id, a.name, a.folder, a.created_at, COALESCE(a.sync_to_pi, 0) AS synced, "
         "(SELECT COUNT(*) FROM album_items i WHERE i.album_id=a.id AND " + VISIBLE_ITEM + ") AS count, "
         "(SELECT i.file_id FROM album_items i WHERE i.album_id=a.id AND " + VISIBLE_ITEM +
         " ORDER BY i.added_at DESC, i.file_id DESC LIMIT 1) AS cover "
@@ -75,7 +75,8 @@ VISIBLE_ITEM = "NOT EXISTS (SELECT 1 FROM file_review fr WHERE fr.file_id=i.file
 
 
 def get_album(db: DB, album_id: int) -> dict:
-    r = db.one("SELECT id, name, folder, created_at FROM albums WHERE id=?", (album_id,))
+    r = db.one("SELECT id, name, folder, created_at, COALESCE(sync_to_pi, 0) AS synced FROM albums WHERE id=?",
+               (album_id,))
     if not r:
         raise AlbumError("album not found")
     return dict(r)
@@ -231,6 +232,16 @@ def delete_album(db: DB, out: Path, album_id: int) -> dict:
         db.execute("DELETE FROM albums WHERE id=?", (album_id,))
         db.commit()
     return {"deleted": album_id, "photos_kept": len(rows), "folder_left": d.is_dir()}
+
+
+def set_sync(db: DB, out: Path, album_ids, on: bool) -> dict:
+    """v0.7: mark albums to send (or stop sending) to CalendarPeace with Family sync. Only marked albums are sent."""
+    ids = sorted({int(a) for a in album_ids})
+    with db.lock:
+        found = [r[0] for r in db.query(f"SELECT id FROM albums WHERE id IN ({','.join('?' * len(ids))})", ids)] if ids else []
+        db.executemany("UPDATE albums SET sync_to_pi=? WHERE id=?", [(1 if on else 0, a) for a in found])
+        db.commit()
+    return {"changed": len(found), "synced": on}
 
 
 def drop_links_to(db: DB, out: Path, file_id: int):

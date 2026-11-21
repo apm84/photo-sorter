@@ -376,6 +376,17 @@ def pi(tmp_path, monkeypatch):
     httpd.server_close()
 
 
+def sync_album_of_everything(db, out, name="Everything"):
+    """v0.7: Family sync sends only albums picked for CalendarPeace. Tests that want the old whole-library scope
+    put every photo/video (not screenshots, not Live Photo clips) into one synced album."""
+    a = albums.create_album(db, out, name)
+    ids = [r[0] for r in db.query("SELECT id FROM files WHERE type IN ('photo', 'video') "
+                                  "AND NOT (COALESCE(live, 0)=1 AND media='video')")]
+    albums.add_files(db, out, a["id"], ids)
+    albums.set_sync(db, out, [a["id"]], True)
+    return a
+
+
 def test_old_calendar_receiver_says_moved(tmp_path):
     """family calendar 0.1.18+ answers /api/photosync/* with 410 {"moved": true}: tell the user the new address."""
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -412,6 +423,8 @@ def test_sync_end_to_end_resume_and_deletions(sample_src, tmp_path, pi, monkeypa
     keep_id = db.one("SELECT id FROM files WHERE filename='IMG_0002.jpg'")[0]
     al = albums.create_album(db, out, "Christmas 2021")
     albums.add_files(db, out, al["id"], [keep_id])
+    albums.set_sync(db, out, [al["id"]], True)
+    everything = sync_album_of_everything(db, out)
     tok = app.family.new_token()
     sync.update_config(out, {"network_sync": True, "pi_url": url, "token": tok, "max_mbps": 50, "include_full": True})
     assert sync.test_connection(out)["ok"]
@@ -440,7 +453,7 @@ def test_sync_end_to_end_resume_and_deletions(sample_src, tmp_path, pi, monkeypa
     meta = app.family.meta()
     n_photos = len(plan["photos"])
     assert meta["total"] == n_photos and n_photos >= 4
-    assert [a["name"] for a in meta["albums"]] == ["Christmas 2021"]
+    assert sorted(a["name"] for a in meta["albums"]) == ["Christmas 2021", "Everything"]
     items = app.family.browse(album=al["id"])["items"]
     assert len(items) == 1 and items[0]["o"]
     got = app.family.media_path(items[0]["o"].rsplit("/", 1)[1]).read_bytes()
@@ -468,11 +481,27 @@ def test_sync_end_to_end_resume_and_deletions(sample_src, tmp_path, pi, monkeypa
     assert tree_hashes(sample_src) == before
     assert {k: v for k, v in tree_hashes(out / "Photos").items()} == lib_before
 
+    # v0.7 "Stop syncing": the album's photos leave the Pi, except those another synced album still holds
+    albums.set_sync(db, out, [everything["id"]], False)
+    assert sync.Syncer(out, run_mode="full").run()["ok"]
+    meta = app.family.meta()
+    assert meta["total"] == 1 and [a["name"] for a in meta["albums"]] == ["Christmas 2021"]
+    assert [i["id"] for i in app.family.browse()["items"]] == [keep_id]
+    # no album picked: an empty catalog, the Pi ends up with nothing, and the status says why
+    albums.set_sync(db, out, [al["id"]], False)
+    assert sync.Syncer(out, run_mode="full").run()["ok"]
+    assert app.family.meta()["total"] == 0 and list((app.family.lib / "media").rglob("*.o.*")) == []
+    st = sync.status(out)
+    assert st["albums_selected"] == 0 and st["line"] == "Family sync: no albums selected for CalendarPeace"
+    assert "No albums selected for CalendarPeace" in st["no_albums_message"]
+    assert tree_hashes(sample_src) == before
+
 
 def test_sync_pause_and_wrong_token(sample_src, tmp_path, pi):
     app, url = pi
     out = tmp_path / "out"
     run(sample_src, out)
+    sync_album_of_everything(DB(db_path(out)), out)
     app.family.new_token()
     sync.update_config(out, {"network_sync": True, "pi_url": url, "token": "x" * 40})
     res = sync.Syncer(out, run_mode="full").run()
@@ -503,6 +532,7 @@ def test_worker_lock_and_daemon_once(sample_src, tmp_path, pi):
     assert sync.worker_alive(out)
     assert sync.daemon_main(out, once=True) == 0              # another worker holds the lock: exits at once
     lk.release()
+    sync_album_of_everything(DB(db_path(out)), out)
     sync.update_config(out, {"network_sync": True, "pi_url": url, "token": app.family.new_token()})
     assert sync.daemon_main(out, once=True, sleep=lambda s: None) == 0
     assert sync.read_state(out)["phase"] == "done"
@@ -524,3 +554,91 @@ def test_sync_pages_and_api(sample_src, tmp_path):
     assert c.post("/api/sync/now", headers={"X-PhotoSorter": "1"}).status_code == 409    # no pairing code yet
     for page in ("/", "/people", "/albums", "/cleanup", "/verify", "/sync"):
         assert 'href="/sync"' in c.get(page).text
+
+
+def test_build_plan_sends_only_albums_picked_for_calendarpeace(sample_src, tmp_path):
+    """v0.7: nothing from the library is sent unless it is in an album picked for CalendarPeace."""
+    out = tmp_path / "out"
+    run(sample_src, out)
+    db = DB(db_path(out))
+    cfg = sync.load_config(out)
+    plan = sync.build_plan(out, cfg, db=db)
+    assert plan["photos"] == [] and plan["albums"] == [] and plan["people"] == [] and plan["items"] == []
+    assert plan["synced_albums"] == 0
+    ids = [r[0] for r in db.query("SELECT id FROM files WHERE type='photo' AND dest_path IS NOT NULL "
+                                  "AND (rep_id IS NULL OR rep_id=id) AND (is_keeper IS NULL OR is_keeper=1) ORDER BY id")]
+    assert len(ids) >= 3
+    a = albums.create_album(db, out, "Beach")
+    b = albums.create_album(db, out, "Not picked")
+    c = albums.create_album(db, out, "Also picked")
+    albums.add_files(db, out, a["id"], ids[:2])
+    albums.add_files(db, out, b["id"], ids[2:])
+    albums.add_files(db, out, c["id"], ids[1:2])
+    # albums exist but none is picked yet: still nothing
+    assert sync.build_plan(out, cfg, db=db)["photos"] == []
+    assert albums.set_sync(db, out, [a["id"], c["id"], 99999], True) == {"changed": 2, "synced": True}
+    plan = sync.build_plan(out, cfg, db=db)
+    assert sorted(r["id"] for r in plan["photos"]) == sorted(ids[:2])
+    assert sorted(x["n"] for x in plan["albums"]) == ["Also picked", "Beach"]
+    assert {x["id"] for x in plan["albums"]} == {a["id"], c["id"]}
+    for r in plan["photos"]:
+        assert b["id"] not in r["al"]                       # unpicked albums never appear in the catalog
+    shared = next(r for r in plan["photos"] if r["id"] == ids[1])
+    assert sorted(shared["al"]) == sorted([a["id"], c["id"]])
+    assert {it["row"]["id"] for it in plan["items"] if "row" in it} == set(ids[:2])
+    # people: only those seen in the sent photos
+    sent_people = {x["id"] for x in plan["people"]}
+    seen = {r[0] for r in db.query(f"SELECT DISTINCT person_id FROM faces WHERE person_id IS NOT NULL "
+                                   f"AND file_id IN ({','.join('?' * len(ids[:2]))})", ids[:2])}
+    assert sent_people <= seen
+    # Stop syncing one album: a photo another picked album holds stays
+    albums.set_sync(db, out, [a["id"]], False)
+    plan = sync.build_plan(out, cfg, db=db)
+    assert [r["id"] for r in plan["photos"]] == [ids[1]] and [x["n"] for x in plan["albums"]] == ["Also picked"]
+    assert [x["synced"] for x in albums.list_albums(db) if x["id"] == c["id"]] == [1]
+
+
+def test_album_actions_endpoint(sample_src, tmp_path):
+    """v0.7: Albums page, one selection + Actions: Sync with CalendarPeace, Stop syncing, Delete."""
+    out = tmp_path / "out"
+    run(sample_src, out)
+    from fastapi.testclient import TestClient
+    from photosorter.web.app import create_app
+    c = TestClient(create_app(out))
+    h = {"X-PhotoSorter": "1"}
+    a1 = c.post("/api/albums", json={"name": "One"}, headers=h).json()["id"]
+    a2 = c.post("/api/albums", json={"name": "Two"}, headers=h).json()["id"]
+    assert all(a["synced"] == 0 for a in c.get("/api/albums").json()["albums"])
+    assert c.get("/api/sync/status").json()["albums_selected"] == 0
+    assert c.post("/api/albums/action", json={"album_ids": [a1], "action": "sync"}).status_code == 403
+    assert c.post("/api/albums/action", json={"album_ids": [], "action": "sync"}, headers=h).status_code == 400
+    assert c.post("/api/albums/action", json={"album_ids": [a1], "action": "nope"}, headers=h).status_code == 400
+    r = c.post("/api/albums/action", json={"album_ids": [a1, a2], "action": "sync"}, headers=h)
+    assert r.status_code == 200 and r.json()["changed"] == 2
+    assert {a["name"]: a["synced"] for a in c.get("/api/albums").json()["albums"]} == {"One": 1, "Two": 1}
+    assert c.get(f"/api/albums/{a1}").json()["synced"] == 1
+    assert c.get("/api/sync/status").json()["albums_selected"] == 2
+    c.post("/api/albums/action", json={"album_ids": [a2], "action": "unsync"}, headers=h)
+    assert {a["name"]: a["synced"] for a in c.get("/api/albums").json()["albums"]} == {"One": 1, "Two": 0}
+    # delete needs confirmation, and deletes only the albums (photos stay)
+    n_files = DB(db_path(out)).one("SELECT COUNT(*) FROM files")[0]
+    assert c.post("/api/albums/action", json={"album_ids": [a1, a2], "action": "delete"}, headers=h).status_code == 400
+    r = c.post("/api/albums/action", json={"album_ids": [a1, a2], "action": "delete", "confirm": True}, headers=h)
+    assert sorted(r.json()["deleted"]) == sorted([a1, a2]) and c.get("/api/albums").json()["albums"] == []
+    assert DB(db_path(out)).one("SELECT COUNT(*) FROM files")[0] == n_files
+    assert "albums.js" in c.get("/albums").text
+    assert "Sync with CalendarPeace" in c.get("/static/albums.js").text
+
+
+def test_albums_sync_column_is_added_to_old_indexes(tmp_path):
+    import sqlite3
+    from photosorter.db import connect
+    p = tmp_path / "old.sqlite"
+    con = sqlite3.connect(p)
+    con.execute("CREATE TABLE albums (id INTEGER PRIMARY KEY, name TEXT NOT NULL, folder TEXT NOT NULL, created_at TEXT)")
+    con.execute("INSERT INTO albums(name, folder) VALUES('Old', 'Old')")
+    con.commit()
+    con.close()
+    con = connect(p)
+    assert con.execute("SELECT sync_to_pi FROM albums").fetchone()[0] == 0
+    con.close()

@@ -226,3 +226,12 @@ section.person{content-visibility:auto;contain-intrinsic-size:auto 230px}
 .upnext-text{display:grid;align-content:start;min-width:0;padding-top:2px;font-size:13px}
 .sel-undo{border-color:var(--acc);color:var(--acc)}
 .player-next[hidden],.player-wait[hidden],.seek-tip[hidden],.seek-thumb[hidden],.viewer-wait[hidden],.card-dur[hidden]{display:none}
+/* v0.7: Albums page selection (select circle + Actions menu) and the "Synced" (to CalendarPeace) badge */
+.album-wrap{position:relative;display:grid}
+.album-wrap>.named-card{height:100%;box-sizing:border-box}
+.album-wrap .card-sel{top:10px;left:10px}
+.album-wrap:hover .card-sel,.album-wrap:focus-within .card-sel,.albums.selecting .card-sel,.album-wrap.selected .card-sel{opacity:1}
+.album-wrap.selected>.named-card{outline:3px solid var(--acc);outline-offset:-3px}
+.album-synced{position:absolute;top:12px;right:12px;font-size:11px;font-weight:600;border-radius:999px;padding:1px 8px;color:#fff;background:#38a169;pointer-events:none}
+.album-synced.inline{position:static;display:inline-block;vertical-align:middle;margin-left:8px}
+#albums-selbar{padding:0}#albums-selbar.active{padding:6px 0}
