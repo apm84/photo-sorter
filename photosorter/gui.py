@@ -304,6 +304,30 @@ class App:
         self.write_log("Starting search page...")
         threading.Thread(target=self._start_web, args=(out, True, page), daemon=True, name="photosorter-web-open").start()
 
+    def after_run_suggest(self):
+        """Suggested albums (v0.8): look for new events after each sort run, in a low-priority thread.
+        It only reads the index (no AI model runs), so it takes seconds; problems never break the sorter."""
+        from .config import db_path
+        out = self.out_var.get().strip()
+        if not out or not db_path(Path(out)).exists():
+            return
+
+        def work():
+            try:
+                from . import background, suggest
+                from .db import DB
+                background.lower_thread_priority("background")
+                db = DB(db_path(Path(out)))
+                try:
+                    r = suggest.find(db)
+                finally:
+                    db.close()
+                if r["added"]:
+                    self.q.put({"kind": "log", "text": f"Suggested albums: {r['added']} new (Albums page, Suggested)."})
+            except Exception as e:  # noqa: BLE001
+                self.q.put({"kind": "log", "text": f"Suggested albums could not be made: {e}"})
+        threading.Thread(target=work, daemon=True, name="photosorter-suggest").start()
+
     def after_run_sync(self):
         """Family sync (v0.4): start the background sync after each sort run, if it is set up."""
         out = self.out_var.get().strip()
@@ -494,6 +518,7 @@ class App:
                 self.write_log("Error: " + e["text"])
         elif k == "finished":
             self.after_run_sync()
+            self.after_run_suggest()
             self.ensure_web_server()
             self.bar.stop(); self.bar.config(mode="determinate", value=100)
             self.stage_lbl.config(text="Idle")

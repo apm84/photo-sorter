@@ -219,3 +219,23 @@
 - Tests: `test_build_plan_sends_only_albums_picked_for_calendarpeace`, `test_album_actions_endpoint`,
   `test_albums_sync_column_is_added_to_old_indexes`; the end-to-end sync tests pick albums via
   `sync_album_of_everything()` and check Stop syncing / no-albums behaviour against the real receiver.
+
+### v0.8.0: suggested albums
+- New `photosorter/suggest.py` (tables `album_suggestions`, `album_suggestion_items` created by `db.connect`).
+  `eligible_photos`: `type='photo'`, `media IS NULL`, dated (not `date_source='mtime'`), kept copy, not removed in
+  Clean up, has a sorted copy. Screenshots/memes/documents/graphics (SigLIP prompt types) and videos never count.
+- `cluster`: split on > 3 h gap or > 25 km jump between geotagged photos; merge same-day neighbours <= 8 h apart at
+  the same place (centroids <= 2 km, else same main city); drop runs < 6 photos.
+- `find`: skips events with >= 60% of photos already in albums and events overlapping >= 50% with any existing
+  suggestion (open, kept or dismissed), so dismissed ones never come back and nothing is duplicated.
+- Names (`name_for`): scene from stored image tags (`tags` table, TAG_VOCAB; needs >= 2 photos and 25%; `SCENES`
+  map with `PRIORITY`), "in <city>" from reverse-geocoded place, "with" up to 3 named visible people seen in >= 2
+  photos, then the date or date range. Fallbacks: "Day in/Trip to <city>", "Get-together", "Outing"/"Trip".
+  Only real data; no embedding or model run (reuses what the sort stored).
+- Web: `/api/suggestions` (list), `/find`, `/{id}`, `/{id}/remove` (file_ids), `/{id}/rename`, `/{id}/keep`
+  (creates the album via `albums.create_album` + `add_files`, hard links), `/{id}/dismiss`. `/api/search` gains
+  `suggestion=<id>` so the review grid is the normal PhotoGrid. UI is built in `albums.js` (albums.html unchanged):
+  Suggested section + Find suggestions under the albums, review view with one selection + Actions > Remove from
+  suggestion, Rename, Keep as album, Dismiss. Merge of suggestions was skipped.
+- GUI: `after_run_suggest()` runs `suggest.find` in a below-normal-priority thread after each sort run.
+- Tests: `tests/test_v08.py` (clustering, exclusions, naming, album/dismiss memory, endpoints, a real index).

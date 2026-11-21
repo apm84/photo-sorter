@@ -184,6 +184,8 @@ def connect(path: Path | str) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.executescript(SCHEMA)
+    from .suggest import SCHEMA as SUGGEST_SCHEMA      # v0.8: suggested albums
+    conn.executescript(SUGGEST_SCHEMA)
     migrate(conn)
     conn.commit()
     return conn

@@ -173,6 +173,15 @@ stop, and never stalls for long). Pick the speed in the window's **Speed** list:
 (recommended), *Lowest priority* (only spare CPU), or *Full speed* (every core, the 0.3 behaviour). Priority
 changes straight away; thread limits apply from the next Start. Command line: `run --speed full`.
 
+**Suggested albums (0.8).** The **Albums** page has a **Suggested albums** section: press **Find suggestions**
+(it also runs after each sort) and Photo Sorter groups your photos into events (outings, trips, gatherings) by
+time and place, and names them from what the photos show, the named people in them and the date, e.g.
+"Beach day in Destin with Alex and Sam, Jul 12, 2024". Screenshots, memes, documents, graphics and videos are
+always left out, and events that are mostly in an album already aren't suggested. Open a suggestion, select photos
+that don't belong and choose **Actions > Remove from suggestion**, **Rename** it, then **Keep as album** (a normal
+album of hard links) or **Dismiss** (it won't come back). It only reads the index the sort run made (no AI model
+runs again), so it takes seconds; nothing leaves the PC and originals are never touched.
+
 **Family sync to the family calendar Pi.** The library stays on this PC; a one-way copy of what the family needs
 goes to the Pi's SSD over your home network, so everyone can browse it on their phones (the calendar's
 `/family/` app) and the TV can show your albums as slideshows.

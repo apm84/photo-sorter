@@ -34,7 +34,7 @@ def _http(url: str, timeout: float = 5):
 
 
 def test_version_and_updater_offers_0_6_1():
-    assert __version__ == "0.7.0"
+    assert __version__ == "0.8.0"
     assert updater.is_newer("v0.6.1", "0.6.0")
     assert not updater.is_newer("v0.6.1", "0.6.1")
 

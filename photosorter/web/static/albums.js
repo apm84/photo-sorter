@@ -93,7 +93,7 @@ async function openAlbum(id, push) {
   current = a;
   if (push) history.pushState({album: id}, "", `/albums?album=${id}`);
   document.title = `Photo Sorter - ${a.name}`;
-  $("list-view").hidden = true; $("album-view").hidden = false;
+  $("list-view").hidden = true; $("album-view").hidden = false; if ($("sugg-view")) $("sugg-view").hidden = true;
   $("album-title").textContent = a.name;
   if (a.synced) { const b = document.createElement("span"); b.className = "album-synced inline"; b.textContent = "Synced"; $("album-title").appendChild(b); }
   dates = PS.dateFilter($("album-dates"), a.years, reload, "adf");
@@ -122,8 +122,8 @@ function showList(push) {
   current = null;
   if (push) history.pushState({}, "", "/albums");
   document.title = "Photo Sorter - Albums";
-  $("album-view").hidden = true; $("list-view").hidden = false;
-  loadList();
+  $("album-view").hidden = true; $("list-view").hidden = false; if ($("sugg-view")) $("sugg-view").hidden = true;
+  loadList(); loadSuggestions();
 }
 function askName(title, value) {
   const d = $("name-dlg");
@@ -164,5 +164,129 @@ $("del-dlg").addEventListener("close", async () => {
 });
 $("back").onclick = () => showList(true);
 window.addEventListener("popstate", route);
-function route() { const id = +new URLSearchParams(location.search).get("album"); if (id) openAlbum(id, false); else showList(false); }
+function route() {
+  const q = new URLSearchParams(location.search), id = +q.get("album"), sid = +q.get("suggestion");
+  if (id) openAlbum(id, false); else if (sid) openSuggestion(sid, false); else showList(false);
+}
+
+// ---- v0.8 suggested albums: events found in the library (photos only; never screenshots or memes) --------
+let sugg = null, sgrid = null, supdate = () => {};
+function suggSection() {
+  if ($("suggested")) return;
+  const sec = document.createElement("section");
+  sec.className = "suggested-section"; sec.setAttribute("aria-labelledby", "suggested-title");
+  sec.innerHTML = `<div class="gallery-head"><h2 id="suggested-title" class="page-title">Suggested albums</h2>
+      <button type="button" id="find-sugg">Find suggestions</button><span class="status" id="sugg-status" role="status"></span></div>
+    <p class="status">Events, outings and gatherings found from dates, places, the people in them and what the photos show.
+      Screenshots, memes, documents and graphics are always left out. Open one to take out photos that don't belong,
+      rename it, then <b>Keep</b> it as an album or <b>Dismiss</b> it (dismissed ones don't come back).</p>
+    <div class="named albums" id="suggested" role="list" aria-label="Suggested albums"></div>`;
+  $("list-view").appendChild(sec);
+  $("find-sugg").onclick = async () => {
+    $("find-sugg").disabled = true; $("sugg-status").textContent = "Looking for events...";
+    try {
+      const r = await api("/api/suggestions/find", {});
+      $("sugg-status").textContent = r.added ? `${PS.plural(r.added, "new suggestion")}` : "No new suggestions";
+      loadSuggestions();
+    } catch (e) { $("sugg-status").textContent = e.message; }
+    finally { $("find-sugg").disabled = false; }
+  };
+  const view = document.createElement("section");
+  view.id = "sugg-view"; view.hidden = true; view.setAttribute("aria-labelledby", "sugg-title");
+  view.innerHTML = `<div class="gallery-head">
+      <button type="button" id="sugg-back">&larr; All albums</button>
+      <h2 id="sugg-title" class="page-title"></h2><span class="status" id="sugg-count"></span>
+      <button type="button" id="sugg-rename">Rename</button>
+      <button type="button" id="sugg-keep" class="primary">Keep as album</button>
+      <button type="button" id="sugg-dismiss">Dismiss</button></div>
+    <p class="status">Suggested album: select photos that don't belong and choose Actions &gt; Remove from suggestion.</p>
+    <div id="sugg-selbar" class="selbar"></div>
+    <div id="sugg-grid"></div>
+    <div class="loadmore"><button id="sugg-more" hidden>Load more</button></div>`;
+  $("album-view").after(view);
+  $("sugg-back").onclick = () => showList(true);
+  $("sugg-rename").onclick = async () => {
+    const n = await askName("Rename suggestion", sugg.name);
+    if (!n || n === sugg.name) return;
+    try { sugg = await api(`/api/suggestions/${sugg.id}/rename`, {name: n}); $("sugg-title").textContent = sugg.name; say(`Renamed to "${sugg.name}"`); }
+    catch (e) { say(e.message); alert(e.message); }
+  };
+  $("sugg-keep").onclick = async () => {
+    try {
+      const r = await api(`/api/suggestions/${sugg.id}/keep`, {name: sugg.name});
+      say(`Kept as album "${r.album.name}". ${r.message}`); openAlbum(r.album.id, true);
+    } catch (e) { say(e.message); alert(e.message); }
+  };
+  $("sugg-dismiss").onclick = async () => {
+    if (!confirm(`Dismiss "${sugg.name}"? It won't be suggested again. No photos are changed.`)) return;
+    try { await api(`/api/suggestions/${sugg.id}/dismiss`, {}); say(`Dismissed "${sugg.name}"`); showList(true); }
+    catch (e) { say(e.message); }
+  };
+}
+async function loadSuggestions() {
+  suggSection();
+  let list = [];
+  try { list = (await api("/api/suggestions")).suggestions; } catch { return; }
+  const box = $("suggested"); box.replaceChildren();
+  if (!list.length) { box.innerHTML = `<p class="status empty">No suggestions right now. Press Find suggestions to look again.</p>`; return; }
+  for (const s of list) {
+    const el = document.createElement("a");
+    el.className = "named-card album-card suggestion-card"; el.href = `/albums?suggestion=${s.id}`; el.setAttribute("role", "listitem");
+    el.innerHTML = `${s.cover ? `<img loading="lazy" src="/thumb/${s.cover}.jpg" alt="">` : `<span class="noface" aria-hidden="true">&#9633;</span>`}
+      <span class="named-name">${esc(s.name)}</span><span class="named-count">${PS.plural(s.count, "photo")}</span>`;
+    el.onclick = e => { if (e.ctrlKey || e.metaKey || e.shiftKey) return; e.preventDefault(); openSuggestion(s.id, true); };
+    box.appendChild(el);
+  }
+}
+function suggBar() {
+  const bar = $("sugg-selbar");
+  bar.innerHTML = `<span class="selbar-count" aria-live="polite"></span>
+    <button type="button" class="ssel-all">Select all</button>
+    <select class="ssel-action" aria-label="Actions for the selected photos" hidden><option value="">Actions...</option>
+      <option value="remove">Remove from suggestion</option></select>
+    <button type="button" class="ssel-clear" hidden>Clear selection</button>`;
+  bar.querySelector(".ssel-all").onclick = () => sgrid.selectAll();
+  bar.querySelector(".ssel-clear").onclick = () => sgrid.clearSelection();
+  bar.querySelector(".ssel-action").onchange = async e => {
+    const v = e.target.value; e.target.value = "";
+    if (v !== "remove") return;
+    const ids = [...sgrid.sel]; if (!ids.length) return;
+    try {
+      const r = await api(`/api/suggestions/${sugg.id}/remove`, {file_ids: ids});
+      sugg = {...sugg, count: r.count};
+      say(`Took ${PS.plural(ids.length, "photo")} out of the suggestion (the photos themselves are not changed)`);
+      sgrid.clearSelection(); suggReload();
+    } catch (err) { say(err.message); }
+  };
+  return () => {
+    const n = sgrid.sel.size;
+    bar.classList.toggle("active", n > 0);
+    bar.querySelector(".selbar-count").textContent = n ? `${PS.plural(n, "photo")} selected` : "";
+    bar.querySelector(".ssel-action").hidden = bar.querySelector(".ssel-clear").hidden = !n;
+  };
+}
+async function suggReload() {
+  const r = await sgrid.load();
+  if (r) $("sugg-count").textContent = PS.plural(r.total, "photo");
+  supdate();
+}
+async function openSuggestion(id, push) {
+  suggSection();
+  try { sugg = await api(`/api/suggestions/${id}`); } catch { showList(push); return; }
+  if (sugg.state !== "open") { if (sugg.album_id) openAlbum(sugg.album_id, push); else showList(push); return; }
+  if (push) history.pushState({suggestion: id}, "", `/albums?suggestion=${id}`);
+  document.title = `Photo Sorter - ${sugg.name}`;
+  $("list-view").hidden = true; $("album-view").hidden = true; $("sugg-view").hidden = false;
+  $("sugg-title").textContent = sugg.name;
+  const params = extra => { const p = new URLSearchParams({suggestion: sugg.id, ...extra}); for (const [k, v] of [...p]) if (v === "") p.delete(k); return p; };
+  if (!sgrid) {
+    sgrid = new PS.PhotoGrid($("sugg-grid"), {
+      fetchPage: (offset, limit, after) => api(`/api/search?${params(after ? {after, limit} : {offset, limit})}`), more: $("sugg-more"),
+      fetchIds: async () => (await api(`/api/search?${params({ids_only: true})}`)).ids,
+      say, label: "Photos in this suggestion", onSelection: () => supdate()});
+    supdate = suggBar();
+  } else sgrid.clearSelection();
+  await suggReload();
+  $("sugg-back").focus();
+}
 route();

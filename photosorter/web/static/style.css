@@ -235,3 +235,7 @@ section.person{content-visibility:auto;contain-intrinsic-size:auto 230px}
 .album-synced{position:absolute;top:12px;right:12px;font-size:11px;font-weight:600;border-radius:999px;padding:1px 8px;color:#fff;background:#38a169;pointer-events:none}
 .album-synced.inline{position:static;display:inline-block;vertical-align:middle;margin-left:8px}
 #albums-selbar{padding:0}#albums-selbar.active{padding:6px 0}
+/* v0.8: suggested albums on the Albums page */
+.suggested-section{margin-top:28px}
+.suggestion-card{border-style:dashed}
+#sugg-view>p.status{padding:0 16px}

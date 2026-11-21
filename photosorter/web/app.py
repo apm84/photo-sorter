@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from ..config import db_path, index_dir
 from ..db import DB, blob_to_vec
 from ..imaging import open_image
-from .. import albums, cleanup, thumbs as thumbcache, video
+from .. import albums, cleanup, suggest as suggestmod, thumbs as thumbcache, video
 from ..facegroup import METHODS, add_negative, quality_thresholds
 from ..pipeline import build_people_folders, cluster_faces, face_cluster_params, refresh_people
 
@@ -78,6 +78,10 @@ class AlbumFilesBody(BaseModel):
     file_ids: list[int]
     album: int | None = None           # existing album, or
     name: str | None = None            # a new album's name
+
+
+class SuggestionKeepBody(BaseModel):       # v0.8: keep a suggested album (optionally under a new name)
+    name: str | None = None
 
 
 class AlbumActionBody(BaseModel):          # v0.7: Albums page, Actions menu on selected albums
@@ -259,7 +263,7 @@ def create_app(output_root: str | Path, enable_ai: bool = True) -> FastAPI:
                country: str = "", person: int | None = None, tag: str = "", duplicates: bool = False,
                unknown_date: bool = False, album: int | None = None, date_from: str = "", date_to: str = "",
                ids_only: bool = False, limit: int = Query(120, le=1000), offset: int = 0, after: str = "",
-               media: str = "", hide_live: bool = False):
+               media: str = "", hide_live: bool = False, suggestion: int | None = None):
         """Photos matching the filters, newest first. Page with `after` (the `next` cursor of the previous page,
         keyset paging: fast at any depth) or `offset`. The total is only counted for the first page."""
         where, params = [], []
@@ -267,6 +271,10 @@ def create_app(output_root: str | Path, enable_ai: bool = True) -> FastAPI:
             where.append("EXISTS (SELECT 1 FROM album_items i WHERE i.album_id=? AND i.file_id=f.id) AND NOT EXISTS "
                          "(SELECT 1 FROM file_review fr WHERE fr.file_id=f.id AND fr.state='remove')")
             params.append(album)
+        elif suggestion is not None:      # v0.8: the photos still in a suggested album
+            where.append("EXISTS (SELECT 1 FROM album_suggestion_items si WHERE si.suggestion_id=? AND "
+                         "si.file_id=f.id AND si.removed=0) AND " + VISIBLE)
+            params.append(suggestion)
         elif not duplicates:
             where.append(VISIBLE)
         else:
@@ -929,6 +937,49 @@ def create_app(output_root: str | Path, enable_ai: bool = True) -> FastAPI:
                     pass
             return {"deleted": done}
         raise HTTPException(400, "unknown action")
+
+    # ---- v0.8 suggested albums ---------------------------------------------------------------------------
+    def sugg_call(fn, *a):
+        try:
+            return fn(*a)
+        except suggestmod.SuggestionError as e:
+            raise HTTPException(409, str(e))
+
+    @app.get("/api/suggestions")
+    def suggestions_list():
+        return {"suggestions": suggestmod.list_open(db)}
+
+    @app.post("/api/suggestions/find")
+    def suggestions_find(x_photosorter: str | None = Header(None)):
+        require_local_header(x_photosorter)
+        return suggestmod.find(db)
+
+    @app.get("/api/suggestions/{sid}")
+    def suggestions_get(sid: int):
+        try:
+            return suggestmod.get(db, sid)
+        except suggestmod.SuggestionError as e:
+            raise HTTPException(404, str(e))
+
+    @app.post("/api/suggestions/{sid}/remove")
+    def suggestions_remove(sid: int, body: AlbumFilesBody, x_photosorter: str | None = Header(None)):
+        require_local_header(x_photosorter)
+        return sugg_call(suggestmod.remove_files, db, sid, body.file_ids)
+
+    @app.post("/api/suggestions/{sid}/rename")
+    def suggestions_rename(sid: int, body: AlbumBody, x_photosorter: str | None = Header(None)):
+        require_local_header(x_photosorter)
+        return sugg_call(suggestmod.rename, db, sid, body.name)
+
+    @app.post("/api/suggestions/{sid}/keep")
+    def suggestions_keep(sid: int, body: SuggestionKeepBody, x_photosorter: str | None = Header(None)):
+        require_local_header(x_photosorter)
+        return sugg_call(suggestmod.keep, db, out, sid, body.name)
+
+    @app.post("/api/suggestions/{sid}/dismiss")
+    def suggestions_dismiss(sid: int, x_photosorter: str | None = Header(None)):
+        require_local_header(x_photosorter)
+        return sugg_call(suggestmod.dismiss, db, sid)
 
     @app.post("/api/albums/{aid}/open")
     def albums_open(aid: int, x_photosorter: str | None = Header(None)):
